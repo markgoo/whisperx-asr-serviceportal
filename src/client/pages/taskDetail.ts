@@ -233,6 +233,25 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     (spk && speakerColor.get(spk)) || '#6b7280';
 
   /**
+   * 把新名字就地应用到界面上。
+   *
+   * 这里刻意**不整页重渲染** —— 整页重渲染会重建 <audio> 元素，
+   * 播放位置会被重置到开头。只重画跟名字有关的三块：
+   * 筛选标签、转写列表、右侧发言统计。
+   */
+  const applyNames = (next: Record<string, string>): void => {
+    for (const key of Object.keys(customNames)) delete customNames[key];
+    Object.assign(customNames, next);
+    speakerOrder.forEach((spk, i) => {
+      speakerName.set(spk, customNames[spk] || `说话人 ${i + 1}`);
+    });
+    renderFilters();
+    renderList();
+    renderStats();
+    syncPlayer();
+  };
+
+  /**
    * 只改某一个说话人的名字。
    * 传入原始标签，保存时以「当前已有的名字」为基础改动这一条，不会影响别人。
    */
@@ -270,8 +289,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
         else delete next[spk];
         try {
           await api.renameSpeakers(task.id, next);
+          // 就地更新，不重建播放器 —— 否则会跳回音频开头
+          applyNames(next);
           toast('已保存', 'ok');
-          void renderTaskDetail(root, task.id);
         } catch (err) {
           toast(err instanceof Error ? err.message : String(err), 'err');
         }
@@ -636,41 +656,53 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     ),
   );
 
+  // ---- 说话人发言占比（可单独重建，改名时不用整页刷新）-------------------
+  const statsCard = h(
+    'div',
+    { class: 'card' },
+    h('div', { class: 'card-head' }, h('h2', null, '说话人发言占比')),
+    h('div', { class: 'card-body' }),
+  );
+
+  function renderStats(): void {
+    if (statList.length <= 1) {
+      statsCard.style.display = 'none';
+      return;
+    }
+    statsCard.style.display = '';
+    const body = statsCard.querySelector('.card-body') as HTMLElement;
+    body.innerHTML = '';
+    body.appendChild(
+      h(
+        'div',
+        { class: 'speaker-bar', style: 'height:10px;margin-bottom:14px' },
+        ...statList.map((s) =>
+          h('span', {
+            style: `width:${(s.seconds / totalSeconds) * 100}%;background:${colorOf(s.speaker)}`,
+            title: `${labelOf(s.speaker)} ${fmtDuration(s.seconds)}`,
+          }),
+        ),
+      ),
+    );
+    for (const s of statList) {
+      body.appendChild(
+        h(
+          'div',
+          { class: 'spk-stat' },
+          h('span', { class: 'chip-dot', style: `background:${colorOf(s.speaker)}` }),
+          h('span', { style: 'flex:1;font-weight:600;color:' + colorOf(s.speaker) }, labelOf(s.speaker)),
+          h('span', { class: 'tiny muted nowrap' }, `${fmtDuration(s.seconds)} · ${s.chars} 字 · ${s.turns} 段`),
+        ),
+      );
+    }
+  }
+
   // ---- 右侧栏（播放器已移到页面顶部）-------------------------------------
   const sidePanel = h(
     'div',
     { class: 'detail-side' },
     audio,
-    statList.length > 1
-      ? h(
-          'div',
-          { class: 'card' },
-          h('div', { class: 'card-head' }, h('h2', null, '说话人发言占比')),
-          h(
-            'div',
-            { class: 'card-body' },
-            h(
-              'div',
-              { class: 'speaker-bar', style: 'height:10px;margin-bottom:14px' },
-              ...statList.map((s) =>
-                h('span', {
-                  style: `width:${(s.seconds / totalSeconds) * 100}%;background:${colorOf(s.speaker)}`,
-                  title: `${labelOf(s.speaker)} ${fmtDuration(s.seconds)}`,
-                }),
-              ),
-            ),
-            ...statList.map((s) =>
-              h(
-                'div',
-                { class: 'spk-stat' },
-                h('span', { class: 'chip-dot', style: `background:${colorOf(s.speaker)}` }),
-                h('span', { style: 'flex:1;font-weight:600;color:' + colorOf(s.speaker) }, labelOf(s.speaker)),
-                h('span', { class: 'tiny muted nowrap' }, `${fmtDuration(s.seconds)} · ${s.chars} 字 · ${s.turns} 段`),
-              ),
-            ),
-          ),
-        )
-      : null,
+    statsCard,
     h(
       'div',
       { class: 'card' },
@@ -785,6 +817,7 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     ),
   );
 
+  renderStats();
   renderBody();
   syncPlayer();
 }
