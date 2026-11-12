@@ -1,0 +1,32 @@
+{
+  "name": "whisperx-asr-serviceportal",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web portal for WhisperX ASR service: accounts, tasks, storage and speaker diarization",
+  "main": "dist/server/index.js",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.server.json && tsc -p tsconfig.client.json && node tools/fix-esm-imports.js",
+    "start": "node dist/server/index.js",
+    "dev": "npm run build && node dist/server/index.js",
+    "mock-asr": "node tools/mock-asr.js 9000",
+    "test:e2e": "node tools/smoke-test.js",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "opencc-js": "^1.4.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^4.17.21",
+    "@types/multer": "^1.4.12",
+    "@types/node": "^22.10.2",
+    "puppeteer-core": "^25.17.0",
+    "typescript": "^5.7.2"
+  }
+}

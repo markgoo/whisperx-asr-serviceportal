@@ -1,0 +1,18 @@
+# 运行时数据：SQLite 数据库、上传的录音文件
+# 里面是真实录音和账号信息，绝不能进版本库
+data/
+
+# 依赖
+node_modules/
+
+# 构建产物（tsc 生成）
+dist/
+public/js/
+
+# 本地截图、日志
+screenshots/
+*.log
+
+# 本地环境变量
+.env
+.env.local
