@@ -14,6 +14,8 @@ export interface SplitOptions {
   commaPauseSec: number;
   /** 单段最长时长，超过就强制切（找不到停顿时兜底） */
   maxSegmentSec: number;
+  /** 单段最长字数，超过就切（中文一行太长很难读） */
+  maxSegmentChars: number;
   /** 单段最短时长，太碎的小段并到前一段 */
   minSegmentSec: number;
   /** 是否为缺标点的句子补标点 */
@@ -22,8 +24,9 @@ export interface SplitOptions {
 
 export const DEFAULT_SPLIT: SplitOptions = {
   pauseSec: 0.85,
-  commaPauseSec: 0.9,
+  commaPauseSec: 0.45,
   maxSegmentSec: 22,
+  maxSegmentChars: 60,
   minSegmentSec: 0.8,
   addPunctuation: true,
 };
@@ -133,7 +136,7 @@ export function pauseAfter(prev: AsrWord, next: AsrWord | null): number {
  * 否则「没有替代品，就跟台积电…」这种正确断句会被吃掉。
  */
 const CLING_START = new Set(
-  [...'者性化们的了着过地得吗呢吧啊呀嘛哦欸'],
+  [...'者性化们的了着过地得吗呢吧啊呀嘛哦欸在'],
 );
 
 /** 判断在 pos 处断句是否会切在黏着字前面。 */
@@ -210,17 +213,82 @@ export function joinWordsWithPauses(words: AsrWord[], commaSec: number): string 
   return out.replace(/，{2,}/g, '，');
 }
 
+/** 合并后的处理块：同一说话人的一段连续发言。 */
+interface Block {
+  start: number;
+  end: number;
+  speaker: string | null;
+  /** 各原始 whisper 段落的文本，用于覆盖率校验 */
+  texts: string[];
+  /** 本块包含的词（按顺序拼接各段落分配到的词） */
+  words: AsrWord[];
+}
+
 /**
- * 用词级时间戳处理段落。
+ * 把词按顺序分配到各个原始段落上。
  *
- * 策略（从保守到激进）：
- * 1. **保留 whisper 原有的分段**。它按 VAD 切分，本来就是自然句；
- *    靠词时长再切会把「竞争者」切成「竞争 / 者」这类错误。
- * 2. 段落内部只要检测到停顿就插逗号 —— 这样停顿在文字上看得见。
- * 3. 只有时长超过 maxSegmentSec 的段落才强制切开，
- *    切点选在最长的那几个停顿上，并且吸附到中文词边界。
+ * whisper 的 segment 时间范围和词时间并不严格对齐，用时间过滤会重复或漏词。
+ * 这里用游标按「词开始时间 < 段落结束时间」依次分配，保证每个词只归属一段。
+ */
+function assignWordsToSegments(segments: AsrSegment[], words: AsrWord[]): AsrWord[][] {
+  const result: AsrWord[][] = [];
+  let cursor = 0;
+  for (const seg of segments) {
+    const start = cursor;
+    while (cursor < words.length && words[cursor].start < seg.end + 0.1) {
+      cursor += 1;
+    }
+    result.push(words.slice(start, cursor));
+  }
+  // 剩余的词（若有）挂到最后一段，避免丢词
+  if (cursor < words.length && result.length) {
+    result[result.length - 1].push(...words.slice(cursor));
+  }
+  return result;
+}
+
+/**
+ * 把相邻的、同一说话人的段落合并成块。
  *
- * 找不到词时退化成只补标点，不会丢内容。
+ * whisper 的 VAD 边界可能落在词中间（「什么」被切成「有什」+「么」），
+ * 单独处理每个段落就会把这个断裂保留下来。合并后整块重切才能修掉。
+ */
+function mergeAdjacent(
+  segments: AsrSegment[],
+  segWords: AsrWord[][],
+  maxGapSec = 2,
+): Block[] {
+  const blocks: Block[] = [];
+  for (let i = 0; i < segments.length; i += 1) {
+    const s = segments[i];
+    const last = blocks[blocks.length - 1];
+    if (last && last.speaker === (s.speaker || null) && s.start - last.end <= maxGapSec) {
+      last.end = Math.max(last.end, s.end);
+      last.texts.push(s.text);
+      last.words.push(...segWords[i]);
+    } else {
+      blocks.push({
+        start: s.start,
+        end: s.end,
+        speaker: s.speaker || null,
+        texts: [s.text],
+        words: [...segWords[i]],
+      });
+    }
+  }
+  return blocks;
+}
+
+/**
+ * 用词级时间戳重排段落。
+ *
+ * 流程：
+ * 1. 相邻同说话人段落先合并成块 —— 消除 whisper 边界落在词中间的问题
+ * 2. 块内用**词**重建文本（不再用 whisper 的 segment.text，避免拼出断词）
+ * 3. 检测词间停顿，短停顿插逗号、长停顿切段
+ * 4. 所有切点吸附到中文词边界
+ *
+ * 找不到词或词覆盖率过低时退化成只补标点，不会丢内容。
  */
 export function splitByPause(
   segments: AsrSegment[],
@@ -229,25 +297,31 @@ export function splitByPause(
 ): AsrSegment[] {
   const withPunct = (text: string, forceEnd = false): string =>
     opts.addPunctuation ? punctuate(text, forceEnd) : text;
-  const lastSegIndex = segments.length - 1;
 
   if (!words.length || !segments.length) {
-    return segments.map((s, i) => ({ ...s, text: withPunct(s.text, i === lastSegIndex) }));
+    return segments.map((s, i) => ({
+      ...s,
+      text: withPunct(s.text, i === segments.length - 1),
+    }));
   }
 
+  const segWords = assignWordsToSegments(segments, words);
+  const blocks = mergeAdjacent(segments, segWords);
   const out: AsrSegment[] = [];
 
-  for (let si = 0; si < segments.length; si += 1) {
-    const seg = segments[si];
-    const isLast = si === lastSegIndex;
-    const inside = words.filter((w) => w.start >= seg.start - 0.15 && w.end <= seg.end + 0.15);
+  for (let bi = 0; bi < blocks.length; bi += 1) {
+    const block = blocks[bi];
+    const isLastBlock = bi === blocks.length - 1;
+
+    const inside = block.words;
+    const fallbackText = block.texts.join('');
 
     if (inside.length < 2) {
-      out.push({ ...seg, text: withPunct(seg.text, isLast) });
+      out.push({ start: block.start, end: block.end, speaker: block.speaker, text: withPunct(fallbackText, isLastBlock) });
       continue;
     }
 
-    // 拼出完整文本，记录每个词边界处的停顿
+    // 用词重建文本，同时记录每个词边界处的停顿
     let text = '';
     const pauses: { pos: number; dur: number }[] = [];
     for (let i = 0; i < inside.length; i += 1) {
@@ -255,11 +329,11 @@ export function splitByPause(
       text += inside[i].word;
     }
 
-    // 取词不全时用原文，避免丢字
+    // 词覆盖率太低（词没取全 / 词和文本对不上）就退回原文本，避免丢字
     const covered = inside.reduce((a, w) => a + w.word.length, 0);
-    const baseLen = seg.text.replace(/[，。！？；、\s]/g, '').length;
-    if (baseLen > 0 && covered / baseLen < 0.6) {
-      out.push({ ...seg, text: withPunct(seg.text, isLast) });
+    const baseLen = fallbackText.replace(/[，。！？；、\s]/g, '').length;
+    if (baseLen > 0 && covered / baseLen < 0.55) {
+      out.push({ start: block.start, end: block.end, speaker: block.speaker, text: withPunct(fallbackText, isLastBlock) });
       continue;
     }
 
@@ -304,20 +378,23 @@ export function splitByPause(
       .sort((a, b) => a.pos - b.pos);
     const uniqueMarks = ranked.map((x) => x.pos);
 
-    // 时长超过上限才切，切点选最长的几个停顿
-    const duration = seg.end - seg.start;
+    const duration = block.end - block.start;
+    const durationCuts = Math.max(0, Math.ceil(duration / opts.maxSegmentSec) - 1);
+    const charCuts = Math.max(0, Math.ceil(text.length / opts.maxSegmentChars) - 1);
+    const wantCuts = Math.max(durationCuts, charCuts);
+
     let cuts: number[] = [];
-    if (duration > opts.maxSegmentSec && uniqueMarks.length) {
-      const pieceCount = Math.ceil(duration / opts.maxSegmentSec);
-      if (pieceCount > 1) {
-        const scored = uniqueMarks
-          .map((pos) => ({ pos, dur: pauses.find((p) => snap(p.pos) === pos)?.dur ?? 0 }))
-          .sort((a, b) => b.dur - a.dur)
-          .slice(0, pieceCount - 1)
-          .map((x) => x.pos)
-          .sort((a, b) => a - b);
-        cuts = scored;
-      }
+    if (wantCuts > 0 && uniqueMarks.length) {
+      // 切点选停顿最长的几处；弱停顿留在段内当逗号
+      cuts = uniqueMarks
+        .map((pos) => ({
+          pos,
+          dur: pauses.reduce((b, p) => (snap(p.pos) === pos ? Math.max(b, p.dur) : b), 0),
+        }))
+        .sort((a, b) => b.dur - a.dur)
+        .slice(0, wantCuts)
+        .map((x) => x.pos)
+        .sort((a, b) => a - b);
     }
 
     // 按切点切片，切点同时也是逗号位置
@@ -356,8 +433,8 @@ export function splitByPause(
       out.push({
         start: timeAt(a),
         end: timeAt(b),
-        speaker: seg.speaker,
-        text: withPunct(body, isLast && ri === ranges.length - 1),
+        speaker: block.speaker,
+        text: withPunct(body, isLastBlock && ri === ranges.length - 1),
       });
     }
   }
