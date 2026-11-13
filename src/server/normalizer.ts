@@ -188,7 +188,66 @@ function compactIndexToOriginal(text: string, compactIdx: number): number {
 /**
  * 截掉模型在长音频末尾产生的「重复幻觉」。
  *
- * whisper 录音快结束时常把前面说过的话再吐一遍，甚至接上不相关的名字。
+/**
+ * 压缩段内同一个短语的循环重复。
+ *
+ * whisper 在背景噪音、笑声、听众起哄处会陷入循环，吐出几十遍同一个词：
+ *   「没有没有没有没有没有没有没有没有…」（实测连续 40 秒）
+ *
+ * `truncateRepetition` 处理的是「复述前文」，管不了这种段内循环，
+ * 所以单独做一次压缩：同一个短语连续出现 >= minRepeat 次就只留一次。
+ * 两个字的「没有没有」这种正常口语（2 次）不会被误伤。
+ */
+export function collapseRepeats(text: string, minRepeat = 4): string {
+  if (!text) return text;
+  let out = '';
+  let i = 0;
+
+  while (i < text.length) {
+    let matched = false;
+    // 从长到短找重复单元，优先匹配长短语（「真的没有」「不好意思」）
+    for (let len = Math.min(8, text.length - i); len >= 2; len -= 1) {
+      const unit = text.slice(i, i + len);
+      if (/^[，。！？；、\s]+$/.test(unit)) continue;
+      let count = 1;
+      let j = i + len;
+      while (text.slice(j, j + len) === unit) {
+        count += 1;
+        j += len;
+      }
+      if (count >= minRepeat) {
+        out += unit;
+        i = j;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      out += text[i];
+      i += 1;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * 判断一段是不是「纯幻觉」。
+ *
+ * 压缩重复后如果几乎没剩下实质内容（例如整段只有「没有」），
+ * 说明这是噪音引起的循环输出，不是真人在说话，应该整段丢掉。
+ */
+export function isHallucination(text: string): boolean {
+  const body = text.replace(/[，。！？；、\s]/g, '');
+  if (!body) return true;
+  const collapsed = collapseRepeats(text).replace(/[，。！？；、\s]/g, '');
+  // 压缩后只剩零星重复残留就整段丢掉。正常短句（「对，自发的很」）
+  // 压缩前后长度几乎不变，不会被误伤。
+  return collapsed.length <= body.length * 0.3 && collapsed.length < 18;
+}
+
+/**
+ * 截掉录音末尾的重复段落。
  * 做法：把当前段和之前所有段比较，若出现足够长的同文片段，就从那里截断。
  *
  * @param minMatch 触发截断的最短重复长度（去标点后），默认 10 字
@@ -244,6 +303,17 @@ function trimToSentence(text: string): string {
 /** 对分段数组做规范化，返回新数组。 */
 export function normalizeSegments<T extends { text: string }>(segments: T[], opts: NormalizeOptions): T[] {
   if (!opts.enabled) return segments;
-  const cleaned = segments.map((seg) => ({ ...seg, text: normalizeText(seg.text, opts) }));
-  return truncateRepetition(cleaned).filter((s) => s.text.trim().length > 0);
+
+  // 1. 先用**原始文本**判断是不是纯幻觉段（必须在压缩之前判断，
+  //    压缩后重复比例就没了，isHallucination 会永远返回 false）
+  const real = segments.filter((s) => !isHallucination(s.text));
+
+  // 2. 压掉段内循环重复（「没有没有没有…」连续 40 秒那种）
+  const deduped = real.map((seg) => ({
+    ...seg,
+    text: collapseRepeats(normalizeText(seg.text, opts)),
+  }));
+
+  // 3. 再处理跨段复述
+  return truncateRepetition(deduped).filter((s) => s.text.trim().length > 0);
 }
