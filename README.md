@@ -25,6 +25,9 @@
 > 那个项目带了 `setup-native.bat` / `start-native.bat`，可以直接在 Windows 上
 > 用 Python + CUDA 跑（不需要 Docker、不需要开虚拟化）。
 
+> **给 AI 助手**：如果你要继续开发这个项目，先读 [AGENTS.md](AGENTS.md)，
+> 里面有架构决策、已踩过的坑和已知未解决的问题。
+
 ## 快速开始
 
 ### 方式一：Docker Compose（推荐）
