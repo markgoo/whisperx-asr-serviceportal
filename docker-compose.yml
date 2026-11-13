@@ -34,6 +34,10 @@ services:
       # 说话人分离后的段落重切分：多人对话不重切会被合并成一个人
       # pyannote 分离模型。community-1 是默认；3.1 是更早但更保守的版本，
       # 某些音频上表现不同，可用来对比。
+      # 短于这个秒数的停顿会被填充，从而合并两侧的说话人 turn。
+      # 调大可抑制「过度切分」，但对我们这种「归属错」的问题未必有效。
+      - DIARIZE_MIN_DURATION_OFF=${DIARIZE_MIN_DURATION_OFF:-0}
+      - DIARIZE_CLUSTERING_THRESHOLD=${DIARIZE_CLUSTERING_THRESHOLD:-}
       - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
       - RESEGMENT_BY_SPEAKER=${RESEGMENT_BY_SPEAKER:-false}
       - CACHE_DIR=/.cache
