@@ -32,6 +32,9 @@ services:
       # 卸载后下次请求会重新加载（约 10-20 秒），但不用时显存能还给你。
       - MODEL_KEEP_ALIVE_SECONDS=${MODEL_KEEP_ALIVE_SECONDS:-600}
       # 说话人分离后的段落重切分：多人对话不重切会被合并成一个人
+      # pyannote 分离模型。community-1 是默认；3.1 是更早但更保守的版本，
+      # 某些音频上表现不同，可用来对比。
+      - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
       - RESEGMENT_BY_SPEAKER=${RESEGMENT_BY_SPEAKER:-false}
       - CACHE_DIR=/.cache
       - HF_HOME=/.cache

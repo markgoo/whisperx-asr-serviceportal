@@ -228,14 +228,29 @@ interface SpeakerTurn {
  * 按词的 speaker 分组，切点天然落在词边界上。
  */
 export function groupWordsBySpeaker(words: AsrWord[]): SpeakerTurn[] {
+  // 先补全空标签：whisperx 的 assign_word_speakers 只保证「离 diarization
+  // 区间最近」的词有标签，落在所有区间之外的词（实测 1303 个词里有 3 个）
+  // 会是 null。留着它们会切出「没有说话人」的段落，界面上显示成空白。
+  // 用前一个词的标签继承；开头就为空的，用后面第一个非空标签。
+  const filled: (string | null)[] = words.map((w) => w.speaker || null);
+
+  let lastKnown: string | null = null;
+  for (let i = 0; i < filled.length; i += 1) {
+    if (filled[i]) lastKnown = filled[i];
+    else if (lastKnown) filled[i] = lastKnown;
+  }
+  // 开头的空标签往后找
+  const firstKnown = filled.find((s) => !!s) || null;
+  for (let i = 0; i < filled.length && !filled[i]; i += 1) filled[i] = firstKnown;
+
   const turns: SpeakerTurn[] = [];
-  for (const w of words) {
-    const spk = w.speaker || null;
+  for (let i = 0; i < words.length; i += 1) {
+    const spk = filled[i];
     const last = turns[turns.length - 1];
     if (last && last.speaker === spk) {
-      last.words.push(w);
+      last.words.push(words[i]);
     } else {
-      turns.push({ speaker: spk, words: [w] });
+      turns.push({ speaker: spk, words: [words[i]] });
     }
   }
   return turns;
