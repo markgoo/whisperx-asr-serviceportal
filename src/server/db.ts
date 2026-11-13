@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DB_PATH, DEFAULT_ASR_BASE_URL, SEED_ADMIN_USERNAME, SEED_ADMIN_PASSWORD, ensureDirs } from './config';
+import { DB_PATH, DEFAULT_ASR_BASE_URL, DEFAULT_PUNC_SERVICE_URL, SEED_ADMIN_USERNAME, SEED_ADMIN_PASSWORD, ensureDirs } from './config';
 import { hashPassword } from './password';
 import { nowIso } from './util';
 import type { AppSettings, UserRow } from './types';
@@ -137,6 +137,8 @@ function seedDefaultSettings(): void {
     normalize_enabled: '1',
     normalize_s2t: '1',
     normalize_terms: '',
+    punc_service_url: DEFAULT_PUNC_SERVICE_URL,
+    punc_enabled: '1',
     split_enabled: '1',
     split_pause_sec: '0.45',
   };
@@ -216,6 +218,8 @@ export function getSettings(): AppSettings {
     normalizeEnabled: (map.get('normalize_enabled') ?? '1') === '1',
     normalizeToSimplified: (map.get('normalize_s2t') ?? '1') === '1',
     normalizeTerms: map.get('normalize_terms') ?? '',
+    puncServiceUrl: map.get('punc_service_url') ?? '',
+    puncEnabled: (map.get('punc_enabled') ?? '1') === '1',
     splitEnabled: (map.get('split_enabled') ?? '1') === '1',
     splitPauseSec: Number.parseFloat(map.get('split_pause_sec') ?? '0.45') || 0.45,
   };

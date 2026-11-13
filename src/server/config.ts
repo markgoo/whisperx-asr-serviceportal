@@ -30,6 +30,13 @@ export const PUBLIC_DIR = path.join(PROJECT_ROOT, 'public');
 /** Default ASR backend. Can be overridden at runtime from the settings page. */
 export const DEFAULT_ASR_BASE_URL = envStr('ASR_BASE_URL', 'http://127.0.0.1:9000');
 
+/**
+ * 标点恢复服务的默认地址。
+ * 在 Docker 里必须用服务名（http://punc:9001），容器内的 127.0.0.1
+ * 指向容器自己，连不到别的容器。
+ */
+export const DEFAULT_PUNC_SERVICE_URL = envStr('PUNC_SERVICE_URL', 'http://127.0.0.1:9001');
+
 /** First-run super administrator. */
 export const SEED_ADMIN_USERNAME = envStr('ADMIN_USERNAME', 'admin');
 export const SEED_ADMIN_PASSWORD = envStr('ADMIN_PASSWORD', 'admin123');

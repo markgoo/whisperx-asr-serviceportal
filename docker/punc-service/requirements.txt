@@ -1,0 +1,9 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# CT-Transformer 标点模型。CPU 版 torch 足够（推理一次约 0.1s / 100 字）。
+# funasr 会带 modelscope，首次启动从 ModelScope 拉模型（约 290MB），
+# 之后缓存在镜像卷里。
+torch==2.5.1
+funasr==1.2.6

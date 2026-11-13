@@ -55,6 +55,7 @@ import {
 import { loadTaskFor, requireUser } from './tasks-service';
 import { cancelTask, enqueue, isRunning } from './worker';
 import { checkAsrHealth } from './asrClient';
+import { checkPuncHealth } from './puncClient';
 import type { AppSettings, PublicUser, StorageItem, TaskRow, UserRow } from './types';
 
 export const api = express.Router();
@@ -397,6 +398,14 @@ api.put(
     if (body.allowRegistration !== undefined) {
       setSetting('allow_registration', boolish(body.allowRegistration, false) ? '1' : '0');
     }
+    if (body.puncServiceUrl !== undefined) {
+      const url = str(body.puncServiceUrl);
+      if (url && !/^https?:\/\/.+/i.test(url)) throw badRequest('标点服务地址需要以 http:// 或 https:// 开头');
+      setSetting('punc_service_url', url.replace(/\/+$/, ''));
+    }
+    if (body.puncEnabled !== undefined) {
+      setSetting('punc_enabled', boolish(body.puncEnabled, true) ? '1' : '0');
+    }
     if (body.normalizeEnabled !== undefined) {
       setSetting('normalize_enabled', boolish(body.normalizeEnabled, true) ? '1' : '0');
     }
@@ -410,6 +419,19 @@ api.put(
     }
     audit(actor.id, actor.username, 'settings_update');
     res.json({ settings: publicSettings(getSettings(), actor) });
+  }),
+);
+
+api.get(
+  '/punc/health',
+  requireAuth,
+  asyncHandler(async (_req, res) => {
+    const settings = getSettings();
+    if (!settings.puncServiceUrl) {
+      return res.json({ reachable: false, configured: false, error: '未配置标点服务' });
+    }
+    const health = await checkPuncHealth(settings.puncServiceUrl);
+    res.json({ ...health, configured: true, baseUrl: settings.puncServiceUrl });
   }),
 );
 

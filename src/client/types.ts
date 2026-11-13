@@ -83,6 +83,8 @@ export interface Settings {
   storageRetainDays: number;
   storageQuotaMb: number;
   allowRegistration: boolean;
+  puncServiceUrl: string;
+  puncEnabled: boolean;
   normalizeEnabled: boolean;
   normalizeToSimplified: boolean;
   normalizeTerms: string;

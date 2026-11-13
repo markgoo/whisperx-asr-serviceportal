@@ -94,6 +94,84 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
     ),
   );
 
+  // ---- 标点服务 ----------------------------------------------------------
+  const puncUrl = h('input', {
+    type: 'text',
+    value: settings.puncServiceUrl || '',
+    placeholder: 'http://127.0.0.1:9001（留空则不使用）',
+  }) as HTMLInputElement;
+  const puncEnabled = h('input', { type: 'checkbox', checked: settings.puncEnabled }) as HTMLInputElement;
+  const puncHealthBox = h('div', { class: 'tiny muted' }, '未检测');
+
+  const checkPuncHealth = async (): Promise<void> => {
+    puncHealthBox.innerHTML = '';
+    puncHealthBox.appendChild(document.createTextNode('检测中…'));
+    try {
+      const health = await api.puncHealth();
+      puncHealthBox.innerHTML = '';
+      if (!health.configured) {
+        puncHealthBox.appendChild(h('span', { class: 'badge-pill warn' }, '未配置'));
+        return;
+      }
+      if (health.reachable) {
+        puncHealthBox.appendChild(
+          h(
+            'span',
+            null,
+            h('span', { class: 'badge-pill ok' }, '已连接'),
+            ` ${health.latencyMs ?? '?'} ms · ${health.model || 'ct-punc'} · ${health.device || 'cpu'}`,
+          ),
+        );
+      } else {
+        puncHealthBox.appendChild(
+          h('span', null, h('span', { class: 'badge-pill err' }, '无法连接'), ` ${health.error || ''}`),
+        );
+      }
+    } catch (err) {
+      puncHealthBox.textContent = err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  const puncCard = h(
+    'div',
+    { class: 'card' },
+    h('div', { class: 'card-head' }, h('h2', null, '标点恢复服务')),
+    h(
+      'div',
+      { class: 'card-body' },
+      h(
+        'div',
+        { class: 'alert info', style: 'font-size:12.5px' },
+        '内置的规则式标点只能靠断句规则猜；接一个 CT-Transformer 标点模型，',
+        '句号和逗号的位置会准得多（实测同一段 106 字，规则式出 3 个标点，模型出 9 个且位置正确）。',
+      ),
+      h(
+        'div',
+        { class: 'switch', style: 'margin-bottom:14px' },
+        puncEnabled,
+        h(
+          'div',
+          null,
+          h('div', { class: 'switch-text' }, '启用模型标点'),
+          h('div', { class: 'switch-sub' }, '服务不可用时自动退回内置规则，不影响转写'),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'field', style: 'margin-bottom:0' },
+        h('label', null, '服务地址'),
+        puncUrl,
+        h('div', { class: 'hint' }, '对应 docker/punc-service 容器，默认监听 9001'),
+      ),
+      h(
+        'div',
+        { class: 'row', style: 'margin-top:10px' },
+        h('button', { class: 'btn sm', onclick: () => void checkPuncHealth() }, '测试连接'),
+        puncHealthBox,
+      ),
+    ),
+  );
+
   // ---- defaults ----------------------------------------------------------
   const defaultsCard = h(
     'div',
@@ -223,6 +301,8 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
             defaultMaxSpeakers: defaultMax.value,
             storageQuotaMb: Number(quota.value) || 0,
             storageRetainDays: Number(retain.value) || 0,
+            puncServiceUrl: puncUrl.value.trim(),
+            puncEnabled: puncEnabled.checked,
             normalizeEnabled: normEnabled.checked,
             normalizeToSimplified: normS2T.checked,
             normalizeTerms: normTerms.value,
@@ -251,6 +331,7 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
       ),
       asrCard,
       defaultsCard,
+      puncCard,
       normCard,
       storageCard,
       h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), saveBtn),
@@ -258,4 +339,5 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
   );
 
   void checkHealth();
+  void checkPuncHealth();
 }

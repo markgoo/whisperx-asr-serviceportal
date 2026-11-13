@@ -141,6 +141,10 @@ export interface AppSettings {
   normalizeToSimplified: boolean;
   /** 用户自定义术语词典（每行 “错误=正确”） */
   normalizeTerms: string;
+  /** 标点恢复服务地址（FunASR CT-Punc），空表示不启用 */
+  puncServiceUrl: string;
+  /** 是否启用模型标点（失败会退回内置启发式） */
+  puncEnabled: boolean;
   /** 按停顿重切分段（长句不再挤成一坨） */
   splitEnabled: boolean;
   /** 判定停顿的秒数阈值 */

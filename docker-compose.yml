@@ -1,0 +1,119 @@
+# WhisperX ASR 全套服务
+#
+#   portal      :8080  门户（账号、任务、存储）
+#   punc        :9001  中文标点恢复（CPU）
+#   asr         :9000  WhisperX 转写（GPU）
+#
+# 用法：
+#   cp .env.docker.example .env.docker   # 填 HF_TOKEN
+#   docker compose up -d
+#   打开 http://127.0.0.1:8080
+
+services:
+  # ---------------------------------------------------------------- ASR 服务
+  asr:
+    # RTX 50xx（Blackwell）用 :blackwell 标签；其他 NVIDIA 卡用 :latest
+    image: learnedmachine/whisperx-asr-service:${ASR_IMAGE_TAG:-latest}
+    container_name: whisperx-asr
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - DEVICE=cuda
+      - COMPUTE_TYPE=${COMPUTE_TYPE:-float16}
+      - BATCH_SIZE=${BATCH_SIZE:-16}
+      - HF_TOKEN=${HF_TOKEN}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-large-v3}
+      - PRELOAD_MODEL=${PRELOAD_MODEL:-}
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-1000}
+      - SERVE_MODE=simple
+      - GPU_CONCURRENCY=1
+      # 说话人分离后的段落重切分：多人对话不重切会被合并成一个人
+      - RESEGMENT_BY_SPEAKER=true
+      - CACHE_DIR=/.cache
+      - HF_HOME=/.cache
+      # nltk 会拒读「别人可写」的目录。挂载进容器的 Windows 目录
+      # （/.cache/nltk_data）正好触发这条安全检查，导致词级时间戳
+      # 对齐失败、分段退化成不切分。这里改用容器内的命名卷。
+      - NLTK_DATA=/data/nltk
+    volumes:
+      # 默认复用同级目录里原生部署已经下好的模型，避免在容器里重下 3GB。
+      # 想用干净的命名卷，把 .env.docker 里的 ASR_CACHE_DIR 设成 whisperx-cache。
+      - ${ASR_CACHE_DIR:-../whisperx-asr-service/.cache}:/.cache
+      - nltk-data:/data/nltk
+    shm_size: "8g"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import requests; requests.get('http://localhost:9000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # ------------------------------------------------------------ 标点恢复服务
+  punc:
+    build:
+      context: ./docker/punc-service
+    image: whisperx-punc:latest
+    container_name: whisperx-punc
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    environment:
+      - PUNC_MODEL=${PUNC_MODEL:-ct-punc}
+      - PUNC_DEVICE=cpu
+    volumes:
+      # 模型约 290MB，缓存在卷里，重建镜像不用重下
+      - punc-models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9001/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ------------------------------------------------------------------- 门户
+  portal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: whisperx-portal:latest
+    container_name: whisperx-portal
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DATA_DIR=/app/data
+      # 容器内用服务名互相访问，不走宿主机的 127.0.0.1
+      - ASR_BASE_URL=http://asr:9000
+      - PUNC_SERVICE_URL=http://punc:9001
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-1}
+    volumes:
+      # 命名卷放在容器的 Linux 文件系统上。
+      # 不要绑到 Windows 的 ./data：SQLite 的 WAL 在跨文件系统绑定时
+      # 容易出现锁失效和性能问题。
+      - portal-data:/app/data
+    depends_on:
+      asr:
+        condition: service_healthy
+      punc:
+        condition: service_started
+
+volumes:
+  nltk-data:
+    driver: local
+  whisperx-cache:
+    driver: local
+  punc-models:
+    driver: local
+  portal-data:
+    driver: local

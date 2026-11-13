@@ -8,6 +8,7 @@ import { transcribeAudio, AsrError, type AsrSegment } from './asrClient';
 import { assertInsideUploads } from './storage';
 import { normalizeSegments, normalizeText, parseTermsText, type NormalizeOptions } from './normalizer';
 import { DEFAULT_SPLIT, mergeShortSegments, punctuate, splitByPause } from './segmenter';
+import { punctuateTexts } from './puncClient';
 import { nowIso } from './util';
 import type { TaskRow } from './types';
 
@@ -198,7 +199,27 @@ async function runTask(task: TaskRow): Promise<void> {
       toSimplified: settings.normalizeToSimplified,
       terms: parseTermsText(settings.normalizeTerms),
     };
-    const segments = normalizeSegments(splitSegments, normOpts);
+    let segments = normalizeSegments(splitSegments, normOpts);
+
+    // 3. 模型标点：用 CT-Punc 重判标点，替换掉启发式的结果。
+    //    服务不可用就保留启发式，绝不能让标点问题导致转写失败。
+    if (settings.puncEnabled && settings.puncServiceUrl) {
+      try {
+        update(task.id, { stage: '整理标点', progress: 92 });
+        const res = await punctuateTexts(
+          settings.puncServiceUrl,
+          segments.map((s) => s.text),
+          // 长录音可能有上百段，给足时间但也不能无限等
+          180_000,
+        );
+        segments = segments.map((s, i) => ({ ...s, text: res.texts[i] || s.text }));
+        log(`任务 #${task.id} 标点完成（${res.elapsedMs}ms / ${segments.length} 段）`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`任务 #${task.id} 标点服务不可用，保留内置标点：${msg}`);
+      }
+    }
+
     const cleanText = settings.normalizeEnabled
       ? normalizeText(result.text, normOpts)
       : result.text;

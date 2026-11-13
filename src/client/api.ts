@@ -77,6 +77,7 @@ export const api = {
   saveSettings: (payload: Partial<Settings>) =>
     request<{ settings: Settings }>('/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   asrHealth: () => request<AsrHealth>('/asr/health'),
+  puncHealth: () => request<{ reachable: boolean; configured: boolean; latencyMs: number | null; model?: string; device?: string; error?: string; baseUrl?: string }>('/punc/health'),
 
   // dashboard
   dashboard: () => request<Dashboard>('/dashboard'),
