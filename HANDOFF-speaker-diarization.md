@@ -1,0 +1,229 @@
+# 待处理问题：说话人分离归属错误
+
+**状态**：切分逻辑已优化到极限，但 speaker 归属本身不准，卡在这里。
+**交接日期**：2026-11-13
+**仓库**：
+- 门户 `C:\AI\whisperx-asr-serviceportal`（https://github.com/markgoo/whisperx-asr-serviceportal）@ `16368cb`
+- ASR `C:\AI\whisperx-asr-service`（https://github.com/markgoo/whisperx-asr-service）@ `136628c`
+
+---
+
+## 1. 问题现象
+
+2 分 46 秒的户外采访录音（村民讲一棵树的故事，记者提问）。
+**段落切分本身是对的，但说话人标签归属错了。**
+
+任务 #8 / #9 的实际输出：
+
+```
+[   0.0] SPEAKER_01  每年都有的菩萨生日都会来搞活动，都是在这棵树下，那为什么选在这？
+[   8.1] SPEAKER_01  棵树呢选在这棵树吗？这棵嘛我。
+[  21.6] （空标签）   也不打清楚，反正我爷爷那时候说。
+[  22.0] SPEAKER_00  它是那个里面嘛，有个洞嘛，洞里面有那个菩萨的嘛，它是被雷后来打掉的嘛哦。
+[  24.4] SPEAKER_01  最中间的。
+[  33.5] SPEAKER_01  那颗已经被打掉了是吧？这颗只剩下一层皮了…
+[  55.7] SPEAKER_00  因为它太高了，以前布区里面是布的，有个布舍的…
+```
+
+肉眼可判断的错误：
+
+1. `[0.0]` 和 `[8.1]` 是**记者**的提问（「那为什么选在这？」「选在这棵树吗？」），
+   却被标成 `SPEAKER_01`——而 `SPEAKER_01` 在 `[24.4]`、`[33.5]` 说的明显是村民的内容。
+2. `[22.0]` 和 `[55.7]` 的村民陈述被标成 `SPEAKER_00`，但 `[0.0]` 的记者提问也是
+   `SPEAKER_01`，前后矛盾。
+3. `[21.6]` 段落**没有说话人标签**（界面上显示空白）。
+
+---
+
+## 2. 已经确认的事实（不要去重查）
+
+### 2.1 词级 speaker 是有的
+
+whisperx 的 `assign_word_speakers()` 已经给每个词打了标签，
+`/asr` 的 `word_segments` 里就带着：
+
+```json
+{"word":"今","start":0.031,"end":0.852,"score":0.936,"speaker":"SPEAKER_02"}
+```
+
+1303 个词里 1300 个有标签，只有 3 个是 null（落在 diarization 区间之外）。
+
+**结论：不需要改 ASR 服务来暴露更多数据。**
+
+### 2.2 切分逻辑已经优化到极限
+
+门户已改为按词级 speaker 分组（`groupWordsBySpeaker` + `smoothTurns`，
+在 `src/server/segmenter.ts`），细节：
+
+- 按 `word.speaker` 变化分组，切点天然落在词与词之间，不会切碎中文词
+- `smoothTurns()` 消除换人瞬间抖动：
+  - A→B→A 夹心：把中间那个小轮次并回两侧（按词数 + 时长判断）
+  - 首尾碎边：开头/结尾的短轮次并进相邻段
+- 结果：22 段 → 15 段，碎片（<1.5 秒）从 3 个降到 **0**
+
+**结论：碎片问题已解决，剩下的错误是「整段归属错」，不是切分问题。**
+
+### 2.3 调人数参数没用
+
+同一段音频对比过：
+
+| 设置 | 词数分布 |
+|---|---|
+| 自动判断 | `SPEAKER_00=340  SPEAKER_01=465` |
+| `num_speakers=2` | `SPEAKER_00=340  SPEAKER_01=465`（**完全一致**） |
+| `num_speakers=3` | `SPEAKER_00=305  SPEAKER_01=429  SPEAKER_02=71`（只拆出一小块，主要归属没变） |
+
+**结论：pyannote 的聚类结果稳定，参数调不动。**
+
+---
+
+## 3. 正在做、但被打断的两件事
+
+### 3.1 空 speaker 标签补全（代码已改，未验证）
+
+**文件**：`src/server/segmenter.ts` → `groupWordsBySpeaker()`
+
+**改动**：null 标签的词继承前一个非空标签；开头就为空的，用后面第一个非空标签。
+
+**未验证**：改完后 `npm run build` + 重建容器 + 重新转写任务 #9，
+需要确认 `[21.6]` 那行不再显示空白。
+
+```bash
+cd C:\AI\whisperx-asr-serviceportal
+npx tsc -p tsconfig.server.json
+docker compose --env-file .env.docker build portal
+docker compose --env-file .env.docker up -d --force-recreate portal
+# 然后 POST /api/tasks/9/retry（需先登录）
+```
+
+### 3.2 换 pyannote 模型对比（环境已配好，未跑完）
+
+**当前默认**：`pyannote/speaker-diarization-community-1`
+**想对比**：`pyannote/speaker-diarization-3.1`
+
+代码改动（`C:\AI\whisperx-asr-service\app\pipeline.py` 第 ~757 行）：
+已经支持 `DIARIZATION_MODEL` 环境变量，`docker-compose.yml` 和第 `.env.docker` 也已加。
+
+**⚠️ 重要**：ASR 用的是官方镜像
+`learnedmachine/whisperx-asr-service:latest`，`app/pipeline.py` 的改动是通过
+`docker cp app\pipeline.py whisperx-asr:/workspace/app/pipeline.py` 塞进容器的，
+**容器被 `--force-recreate` 或镜像重建后会丢失**。
+
+要长期生效，得构建自己的 ASR 镜像（把改后的 `app/` 打进去）。
+
+**验证命令**：
+
+```bash
+# 切到 3.1
+# .env.docker 里设 DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
+docker compose --env-file .env.docker up -d --force-recreate asr
+docker cp C:\AI\whisperx-asr-service\app\pipeline.py whisperx-asr:/workspace/app/pipeline.py
+docker restart whisperx-asr
+# 确认日志里加载的是哪个模型
+docker logs whisperx-asr --tail 30 | findstr "Loading diarization pipeline"
+```
+
+---
+
+## 4. 怀疑方向（按可能性排序）
+
+### 4.1 音频质量（最可能）
+
+- 户外采访，背景风声/环境噪声重
+- 记者和村民可能**共用一支话筒**，音色被混
+- 词级时间戳也异常：实测单个词「我」被给了 **5.45 秒**的时长，
+  说明这段音频的对齐质量本身就不高
+
+**建议**：先拿这段音频做降噪/人声分离再转写，看 diarization 是否变准。
+如果确认是音质问题，就不用再折腾参数了。
+
+### 4.2 pyannote 调参
+
+代码里已有 `_apply_diarize_tuning(pipeline)`，pipeline.py 支持：
+
+- `DIARIZE_MIN_DURATION_OFF`（多短的停顿才算换人，调大能减少误切）
+- `VAD_ONSET` / `VAD_OFFSET` / `VAD_METHOD`（pyannote | silero）
+- `DIARIZE_FILL_NEAREST`
+
+这些**都还没针对这段音频试过**，是下一步最省力的方向。
+特别是 `min_duration_off`，它直接控制「短暂停顿是否触发换人」。
+
+### 4.3 换更强的模型
+
+- `pyannote/speaker-diarization-3.1`（更早但稳定）
+- NVIDIA NeMo 的 diarization
+- 阿里 FunASR 的说话人分离（和已接入的 CT-Punc 同一个生态）
+
+### 4.4 接受现状 + 人工修正
+
+界面已支持「说话人改名」和「按人筛选」，切分又准确到词，
+人工把标错的人名改过来是可行的。如果音频质量确实是瓶颈，这是最实际的方案。
+
+---
+
+## 5. 环境与复现
+
+### 服务
+
+```bash
+cd C:\AI\whisperx-asr-serviceportal
+docker compose --env-file .env.docker up -d
+# portal  :8080  admin/admin123
+# asr     :9000  GPU
+# punc    :9001  标点服务
+```
+
+### 测试音频
+
+任务 #8/#9 的原始音频已导出到 `%TEMP%\task8.mp4`（35.9 MB）。
+如果没了，从容器里取：
+
+```bash
+docker cp whisperx-portal:/app/data/uploads/1/<uuid>.mp4 %TEMP%\task8.mp4
+```
+
+路径查法：
+
+```bash
+docker exec -w /app whisperx-portal node -e "const D=require('better-sqlite3');const db=new D('/app/data/portal.db',{readonly:true});console.log(db.prepare('SELECT storage_path FROM tasks WHERE id=8').get());db.close();"
+```
+
+### 直接调 ASR 做实验（不经过门户）
+
+```powershell
+$Body = @{ audio_file = Get-Item "$env:TEMP\task8.mp4" }
+$uri = "http://127.0.0.1:9000/asr?task=transcribe&model=large-v3&output_format=json&diarize=true&language=zh&word_timestamps=true&num_speakers=2"
+$r = Invoke-WebRequest -Uri $uri -Method POST -Form $Body -TimeoutSec 900 -UseBasicParsing
+$r.Content | Set-Content "$env:TEMP\result.json" -Encoding UTF8
+```
+
+### 分析词级 speaker 分布
+
+```bash
+docker exec -w /app whisperx-portal node -e "const D=require('better-sqlite3');const db=new D('/app/data/portal.db',{readonly:true});const s=JSON.parse(db.prepare('SELECT result_json FROM tasks WHERE id=9').get().result_json);for(const x of s.slice(0,10))console.log(x.start.toFixed(1),x.speaker||'(空)',x.text.slice(0,40));db.close();"
+```
+
+---
+
+## 6. 未提交的改动
+
+**门户** `C:\AI\whisperx-asr-serviceportal`：
+- `src/server/segmenter.ts` — 空 speaker 标签补全（3.1 节，未验证）
+- `docker-compose.yml` — 加了 `DIARIZATION_MODEL` 环境变量
+- `tools/check-empty-speaker.js` — 临时排查脚本
+
+**ASR** `C:\AI\whisperx-asr-service`：
+- `app/pipeline.py` — 支持 `DIARIZATION_MODEL` 环境变量
+- `tools/dsh-*.{bat,ps1}` — 与本次问题无关，是别的工具，可以忽略
+
+---
+
+## 7. 给接手方的建议顺序
+
+1. **先验证 3.1 节**（空标签补全），5 分钟，确认那个空白行修好了
+2. **试 `DIARIZE_MIN_DURATION_OFF`**（4.2 节），最省力的调参方向，
+   重点看记者/村民的交替边界是否变准
+3. **如果参数无效**，做一次降噪预处理对比（4.1 节），确认是不是音频质量问题
+4. **如果确认是音质问题**，就别再折腾了，用人工改名（4.4 节）
+
+不建议一上来就换模型或重写分离逻辑——已经验证过参数和切分都不是瓶颈。
