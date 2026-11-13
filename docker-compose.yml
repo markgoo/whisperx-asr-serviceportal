@@ -28,8 +28,11 @@ services:
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-1000}
       - SERVE_MODE=simple
       - GPU_CONCURRENCY=1
+      # 空闲多久后把模型从显存卸载（秒）。0 = 常驻不卸载。
+      # 卸载后下次请求会重新加载（约 10-20 秒），但不用时显存能还给你。
+      - MODEL_KEEP_ALIVE_SECONDS=${MODEL_KEEP_ALIVE_SECONDS:-600}
       # 说话人分离后的段落重切分：多人对话不重切会被合并成一个人
-      - RESEGMENT_BY_SPEAKER=true
+      - RESEGMENT_BY_SPEAKER=${RESEGMENT_BY_SPEAKER:-false}
       - CACHE_DIR=/.cache
       - HF_HOME=/.cache
       # nltk 会拒读「别人可写」的目录。挂载进容器的 Windows 目录

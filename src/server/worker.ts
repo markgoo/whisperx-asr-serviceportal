@@ -7,7 +7,7 @@ import { getDb, getSettings } from './db';
 import { transcribeAudio, AsrError, type AsrSegment } from './asrClient';
 import { assertInsideUploads } from './storage';
 import { normalizeSegments, normalizeText, parseTermsText, type NormalizeOptions } from './normalizer';
-import { DEFAULT_SPLIT, mergeShortSegments, punctuate, splitByPause } from './segmenter';
+import { DEFAULT_SPLIT, mergeShortSegments, punctuate, smoothSpeakers, splitByPause } from './segmenter';
 import { punctuateTexts } from './puncClient';
 import { nowIso } from './util';
 import type { TaskRow } from './types';
@@ -193,13 +193,17 @@ async function runTask(task: TaskRow): Promise<void> {
       ? mergeShortSegments(splitByPause(rawSegments, result.words, splitOpts))
       : mergeShortSegments(rawSegments.map((s) => ({ ...s, text: punctuate(s.text) })));
 
+    // 说话人平滑：diarization 的切换点有抖动，会切出 0.1 秒的碎片和
+    // A→B→A 的假换人。这一步把碎片并回去，并把夹在中间的短句归给前后同一人。
+    const smoothedSegments = smoothSpeakers(splitSegments);
+
     // 2. 后处理：合并拆开的英文/数字、修术语、繁转简、截掉尾部重复
     const normOpts: NormalizeOptions = {
       enabled: settings.normalizeEnabled,
       toSimplified: settings.normalizeToSimplified,
       terms: parseTermsText(settings.normalizeTerms),
     };
-    let segments = normalizeSegments(splitSegments, normOpts);
+    let segments = normalizeSegments(smoothedSegments, normOpts);
 
     // 3. 模型标点：用 CT-Punc 重判标点，替换掉启发式的结果。
     //    服务不可用就保留启发式，绝不能让标点问题导致转写失败。

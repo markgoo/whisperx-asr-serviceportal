@@ -280,6 +280,89 @@ function mergeAdjacent(
 }
 
 /**
+ * 说话人平滑 + 碎片合并。
+ *
+ * 问题：whisperx 的 RESEGMENT_BY_SPEAKER 会按 diarization 给出的说话人切换点
+ * 硬切段落，但那些切换点本身有抖动，于是切出大量碎片：
+ *
+ *   [231.1-231.1] 0.1s  SPEAKER_00  "得就挺。"
+ *   [231.2-231.9] 0.7s  SPEAKER_02  "的一步，但。"
+ *
+ * 实测 50 段里 16 段短于 1.5 秒，A→B→A 抖动 23 处。
+ *
+ * 处理两步：
+ * 1. 极短段（含时长为 0 的）并到相邻段 —— 这种段几乎都是切分噪声
+ * 2. A→B→A 且 B 很短时，把 B 的说话人改成 A（夹在中间的短句是误判）
+ */
+export function smoothSpeakers<T extends { speaker?: string | null; start: number; end: number; text: string }>(
+  segments: T[],
+  minDurSec = 1.5,
+  minChars = 12,
+): T[] {
+  if (segments.length <= 1) return segments;
+
+  const out: T[] = segments.map((s) => ({ ...s }));
+
+  // ---- 第 1 步：极短段并到前一段 ----
+  const merged: T[] = [];
+  for (const seg of out) {
+    const last = merged[merged.length - 1];
+    const dur = seg.end - seg.start;
+    const isTiny = dur <= 0.2 || seg.text.replace(/[，。！？、\s]/g, '').length <= 3;
+
+    if (last && isTiny) {
+      last.end = Math.max(last.end, seg.end);
+      last.text = `${last.text}${seg.text}`;
+      continue;
+    }
+    merged.push({ ...seg });
+  }
+
+  // 首段极短时并到后一段
+  if (merged.length > 1) {
+    const first = merged[0];
+    if (first.end - first.start <= 0.2 || first.text.replace(/[，。！？、\s]/g, '').length <= 3) {
+      merged[1] = { ...merged[1], start: first.start, text: `${first.text}${merged[1].text}` };
+      merged.shift();
+    }
+  }
+
+  // ---- 第 2 步：消除 A→B→A 抖动 ----
+  for (let i = 1; i < merged.length - 1; i += 1) {
+    const prev = merged[i - 1];
+    const cur = merged[i];
+    const next = merged[i + 1];
+    const dur = cur.end - cur.start;
+    const chars = cur.text.replace(/[，。！？、\s]/g, '').length;
+
+    // 夹在两段同一说话人之间的短句：说话人改回去
+    if (prev.speaker === next.speaker && cur.speaker !== prev.speaker && dur < minDurSec && chars < minChars) {
+      merged[i] = { ...cur, speaker: prev.speaker };
+    }
+  }
+
+  // ---- 第 3 步：同一说话人的相邻段合并 ----
+  // 只在其中一段较短时合并，避免两个长段被拼成几十秒的一大坨。
+  const late: T[] = [];
+  for (const seg of merged) {
+    const last = late[late.length - 1];
+    const gap = last ? seg.start - last.end : Infinity;
+    const lastDur = last ? last.end - last.start : 0;
+    const segDur = seg.end - seg.start;
+    const shortEnough = lastDur < 4 || segDur < 3;
+
+    if (last && last.speaker === seg.speaker && gap < 0.3 && shortEnough) {
+      last.end = Math.max(last.end, seg.end);
+      last.text = `${last.text}${seg.text}`;
+      continue;
+    }
+    late.push({ ...seg });
+  }
+
+  return late;
+}
+
+/**
  * 用词级时间戳重排段落。
  *
  * 流程：
