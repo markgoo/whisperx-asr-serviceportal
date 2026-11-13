@@ -213,7 +213,110 @@ export function joinWordsWithPauses(words: AsrWord[], commaSec: number): string 
   return out.replace(/，{2,}/g, '，');
 }
 
-/** 合并后的处理块：同一说话人的一段连续发言。 */
+/** 同一个说话人的连续词。 */
+interface SpeakerTurn {
+  speaker: string | null;
+  words: AsrWord[];
+}
+
+/**
+ * 按**词级** speaker 标签把词分成说话人轮次。
+ *
+ * 这是比 whisperx 的 RESEGMENT_BY_SPEAKER 更可靠的做法：
+ * 那个是按 diarization 给的时间点硬切，中文没有空格，会切在字中间
+ * （「什么」变「有什」+「么」），还会把两个人的话并进一段。
+ * 按词的 speaker 分组，切点天然落在词边界上。
+ */
+export function groupWordsBySpeaker(words: AsrWord[]): SpeakerTurn[] {
+  const turns: SpeakerTurn[] = [];
+  for (const w of words) {
+    const spk = w.speaker || null;
+    const last = turns[turns.length - 1];
+    if (last && last.speaker === spk) {
+      last.words.push(w);
+    } else {
+      turns.push({ speaker: spk, words: [w] });
+    }
+  }
+  return turns;
+}
+
+/**
+ * 平滑说话人轮次，消掉 diarization 在换人瞬间的抖动。
+ *
+ * 判断依据用「夹心」而不是绝对时长：真实插话（「对。」）也很短，
+ * 按长度吞掉会丢掉真实的换人。但夹在两段同一说话人之间的小轮次
+ * 几乎一定是误判：
+ *
+ *   SPEAKER_02 "今天还做不到…"     0.0-5.3
+ *   SPEAKER_01 "早会有是，"         5.3-5.6   ← 夹心，应归给 02
+ *   SPEAKER_02 "有可行性的啊…"      5.6-9.7
+ */
+export function smoothTurns(turns: SpeakerTurn[], maxSqueezeWords = 6, maxSqueezeSec = 2.5): SpeakerTurn[] {
+  if (turns.length <= 2) return turns;
+
+  const dur = (t: SpeakerTurn): number =>
+    t.words.length ? t.words[t.words.length - 1].end - t.words[0].start : 0;
+
+  // 反复处理，因为合并后可能产生新的夹心
+  let changed = true;
+  let cur: SpeakerTurn[] = turns.map((t) => ({ speaker: t.speaker, words: [...t.words] }));
+
+  while (changed) {
+    changed = false;
+    for (let i = 1; i < cur.length - 1; i += 1) {
+      const prev = cur[i - 1];
+      const mid = cur[i];
+      const next = cur[i + 1];
+      if (prev.speaker !== next.speaker || mid.speaker === prev.speaker) continue;
+      // 只处理「小」的夹心，太长的中间发言可能是真的
+      if (mid.words.length > maxSqueezeWords || dur(mid) > maxSqueezeSec) continue;
+
+      prev.words.push(...mid.words);
+      cur.splice(i, 1);
+      changed = true;
+      break;
+    }
+  }
+
+  // 合并后相邻同说话人的轮次
+  const merged: SpeakerTurn[] = [];
+  for (const t of cur) {
+    if (!t.words.length) continue;
+    const last = merged[merged.length - 1];
+    if (last && last.speaker === t.speaker) last.words.push(...t.words);
+    else merged.push(t);
+  }
+
+  // 首尾碎边：开头的 "我，" 和结尾的半句话，八成是换人点没对准，
+  // 并进相邻那一段（它们没有 prev/next 可以构成夹心，得单独处理）
+  if (merged.length > 1) {
+    const first = merged[0];
+    // 只按词数判断：这个音频里单个词被给了 5.45s 的时长，时长不可靠
+    if (first.words.length <= maxSqueezeWords) {
+      merged[1].words.unshift(...first.words);
+      merged.shift();
+    }
+  }
+  if (merged.length > 1) {
+    const last = merged[merged.length - 1];
+    if (last.words.length <= maxSqueezeWords) {
+      merged[merged.length - 2].words.push(...last.words);
+      merged.pop();
+    }
+  }
+
+  // 首尾合并后可能又出现相邻同人，再收一次
+  const final: SpeakerTurn[] = [];
+  for (const t of merged) {
+    if (!t.words.length) continue;
+    const last = final[final.length - 1];
+    if (last && last.speaker === t.speaker) last.words.push(...t.words);
+    else final.push(t);
+  }
+  return final;
+}
+
 interface Block {
   start: number;
   end: number;
@@ -222,6 +325,8 @@ interface Block {
   texts: string[];
   /** 本块包含的词（按顺序拼接各段落分配到的词） */
   words: AsrWord[];
+  /** 文本完全由词拼成时，跳过原文覆盖率校验 */
+  trusted?: boolean;
 }
 
 /**
@@ -388,8 +493,27 @@ export function splitByPause(
     }));
   }
 
-  const segWords = assignWordsToSegments(segments, words);
-  const blocks = mergeAdjacent(segments, segWords);
+  // 有词级 speaker 标签时，直接按说话人轮次分组 —— 这是最可靠的做法，
+  // 完全不依赖 whisperx RESEGMENT_BY_SPEAKER 切出来的段落边界。
+  // 没有（未开 diarize，或上游没做 assign_word_speakers）才走旧的段落合并。
+  const hasWordSpeakers = words.some((w) => !!w.speaker);
+  let blocks: Block[];
+
+  if (hasWordSpeakers) {
+    const turns = smoothTurns(groupWordsBySpeaker(words));
+    blocks = turns.map((t) => ({
+      start: t.words[0].start,
+      end: t.words[t.words.length - 1].end,
+      speaker: t.speaker,
+      texts: [t.words.map((w) => w.word).join('')],
+      words: t.words,
+      // 文本就是词拼的，覆盖率检查没有意义，跳过
+      trusted: true,
+    }));
+  } else {
+    const segWords = assignWordsToSegments(segments, words);
+    blocks = mergeAdjacent(segments, segWords);
+  }
   const out: AsrSegment[] = [];
 
   for (let bi = 0; bi < blocks.length; bi += 1) {
@@ -415,7 +539,7 @@ export function splitByPause(
     // 词覆盖率太低（词没取全 / 词和文本对不上）就退回原文本，避免丢字
     const covered = inside.reduce((a, w) => a + w.word.length, 0);
     const baseLen = fallbackText.replace(/[，。！？；、\s]/g, '').length;
-    if (baseLen > 0 && covered / baseLen < 0.55) {
+    if (!block.trusted && baseLen > 0 && covered / baseLen < 0.55) {
       out.push({ start: block.start, end: block.end, speaker: block.speaker, text: withPunct(fallbackText, isLastBlock) });
       continue;
     }

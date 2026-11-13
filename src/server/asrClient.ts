@@ -44,6 +44,14 @@ export interface AsrWord {
   word: string;
   start: number;
   end: number;
+  /**
+   * 词级说话人标签。开启 diarize 且上游做了 assign_word_speakers 时才有。
+   *
+   * 有了它就不用依赖 whisperx 的 RESEGMENT_BY_SPEAKER（那个按时间点硬切，
+   * 中文没有空格，经常切在字中间，还会把两个人的话并进一段）。
+   * 门户自己按「词.speaker 变化」分组，切点天然落在词边界上。
+   */
+  speaker?: string | null;
 }
 
 export interface AsrResult {
@@ -230,6 +238,8 @@ export function normalizeAsrResponse(payload: unknown): AsrResult {
       word: typeof w.word === 'string' ? w.word : String(w.word ?? ''),
       start: Number(w.start) || 0,
       end: Number(w.end) || 0,
+      // whisperx 的 assign_word_speakers 会给每个词打上 speaker，带上它
+      speaker: typeof w.speaker === 'string' && w.speaker ? w.speaker : null,
     }))
     .filter((w) => w.word.length > 0 && Number.isFinite(w.start));
 
