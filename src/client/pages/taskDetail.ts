@@ -66,11 +66,16 @@ export async function renderTaskDetail(root: HTMLElement, id: number): Promise<v
   root.appendChild(
     h(
       'div',
-      { class: 'row wrap', style: 'margin-bottom:16px;align-items:flex-start;gap:12px' },
+      { class: 'row wrap detail-hero' },
       h(
         'div',
-        { style: 'min-width:0;flex:1' },
-        h('div', { class: 'row', style: 'gap:10px' }, h('h2', { style: 'margin:0;font-size:19px' }, task.title), statusBadge(task.status)),
+        { class: 'detail-hero-main' },
+        h(
+          'div',
+          { class: 'detail-hero-title' },
+          h('h2', null, task.title),
+          statusBadge(task.status),
+        ),
         h(
           'div',
           { class: 'tiny muted', style: 'margin-top:4px' },
@@ -79,7 +84,7 @@ export async function renderTaskDetail(root: HTMLElement, id: number): Promise<v
       ),
       h(
         'div',
-        { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+        { class: 'row detail-hero-actions' },
         h('button', { class: 'btn sm', onclick: () => navigate('/tasks') }, '← 返回'),
         h(
           'button',

@@ -236,12 +236,12 @@ function taskRow(t: Task, reload: () => Promise<void>): HTMLElement {
           ? h('div', { class: 'tiny', style: 'color:var(--err);max-width:340px' }, t.errorMessage || '转写失败')
           : null,
     ),
-    h('td', null, statusBadge(t.status)),
-    isAdmin() ? h('td', { class: 'tiny muted nowrap' }, t.ownerName || '—') : null,
-    h('td', { class: 'nowrap' }, t.diarize ? `${t.speakerCount || '—'} 人` : h('span', { class: 'muted' }, '未分离')),
-    h('td', { class: 'num nowrap' }, fmtBytes(t.fileSize)),
-    h('td', { class: 'nowrap' }, fmtDuration(t.duration)),
-    h('td', { class: 'nowrap tiny muted' }, fmtDate(t.createdAt)),
+    h('td', { 'data-label': '状态' }, statusBadge(t.status)),
+    isAdmin() ? h('td', { class: 'tiny muted nowrap', 'data-label': '所有者' }, t.ownerName || '—') : null,
+    h('td', { class: 'nowrap', 'data-label': '说话人' }, t.diarize ? `${t.speakerCount || '—'} 人` : h('span', { class: 'muted' }, '未分离')),
+    h('td', { class: 'num nowrap', 'data-label': '大小' }, fmtBytes(t.fileSize)),
+    h('td', { class: 'nowrap', 'data-label': '时长' }, fmtDuration(t.duration)),
+    h('td', { class: 'nowrap tiny muted', 'data-label': '创建时间' }, fmtDate(t.createdAt)),
     h(
       'td',
       { class: 'nowrap' },

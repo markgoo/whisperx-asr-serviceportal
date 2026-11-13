@@ -165,7 +165,11 @@ a:hover { text-decoration: underline; }
   .grid.cols-3, .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 680px) {
-  .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
+  /* 统计卡片内容简单（一个数字 + 一行说明），2x2 比单列省一半高度 */
+  .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; }
+  .stat { padding: 12px 14px; }
+  .stat .value { font-size: 22px !important; }
   .sidebar { display: none; }
   .content { padding: 16px; }
   .topbar { padding: 12px 16px; }
@@ -770,3 +774,128 @@ details.adv[open] { margin-bottom: 6px; }
 
 .speaker-bar { display: flex; height: 8px; border-radius: 999px; overflow: hidden; background: #eceef5; margin-top: 6px; }
 .speaker-bar span { display: block; height: 100%; }
+
+/* ---------- 任务详情页头部 ---------- */
+.detail-hero {
+  margin-bottom: 16px;
+  align-items: flex-start;
+  gap: 12px;
+}
+.detail-hero-main {
+  /* 给个最小宽度：否则 flex:1 会把它压成一条竖线（手机上标题变竖排） */
+  flex: 1 1 280px;
+  min-width: 0;
+}
+.detail-hero-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.detail-hero-title h2 {
+  margin: 0;
+  font-size: 19px;
+  line-height: 1.35;
+  /* 长标题最多两行，不把按钮挤走 */
+  overflow-wrap: anywhere;
+}
+.detail-hero-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .detail-hero-main {
+    flex-basis: 100%;
+  }
+  .detail-hero-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .detail-hero-actions .btn {
+    /* 手机上按钮排两列，避免一行挤 4 个 */
+    flex: 1 1 calc(50% - 4px);
+    min-width: 0;
+    justify-content: center;
+  }
+  .detail-hero-title h2 {
+    font-size: 17px;
+  }
+}
+
+/* 手机端 toast 放到底部，避免挡住顶部按钮 */
+@media (max-width: 720px) {
+  .toasts {
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+    align-items: stretch;
+  }
+  .toasts > * {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* ---------- 手机端：表格变卡片 ---------- */
+@media (max-width: 720px) {
+  .table-wrap {
+    overflow-x: visible;
+  }
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+    width: 100%;
+  }
+  .table thead {
+    display: none;
+  }
+  .table tr {
+    border-bottom: 1px solid var(--border);
+    padding: 14px 16px;
+  }
+  .table tr:first-child {
+    border-top: none;
+  }
+  /* 有 data-label 的单元格排成「标签 值」两栏 */
+  .table td[data-label] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    border: none;
+    padding: 3px 0;
+    text-align: right;
+  }
+  .table td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+    flex: 0 0 auto;
+    text-align: left;
+  }
+  /* 第一列是卡片标题，占满整行 */
+  .table td:first-child {
+    display: block;
+    text-align: left;
+    padding: 0 0 8px;
+  }
+  .table td:first-child .ellipsis {
+    max-width: none !important;
+  }
+  /* 最后一列（操作按钮）靠左排列 */
+  .table td:last-child {
+    display: block;
+    padding-top: 8px;
+  }
+  .table td:last-child > .row {
+    justify-content: flex-start !important;
+  }
+  .table td[data-label] .nowrap {
+    white-space: normal;
+  }
+}
