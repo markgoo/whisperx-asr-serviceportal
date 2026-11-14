@@ -910,3 +910,38 @@ details.adv[open] { margin-bottom: 6px; }
     white-space: normal;
   }
 }
+
+/* 段落拆分的候选切分点 */
+.split-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+}
+.split-point {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1.5;
+}
+.split-point:hover { background: #f4f5fa; }
+.split-point.on { background: #eef0ff; }
+.split-point-punct { font-weight: 600; }
+.split-point-punct .split-mark { color: var(--brand); }
+.split-before { color: var(--text); }
+.split-mark { color: var(--muted-2); font-weight: 700; }
+.split-after { color: var(--muted); }

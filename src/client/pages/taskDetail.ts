@@ -307,6 +307,19 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
           { class: 'btn', style: 'justify-content:flex-start', onclick: () => pick(null) },
           '✕ 标记为「不知道是谁」',
         ),
+        // 一段里混着两个人的话时，先在这里切开，再分别标注
+        h(
+          'button',
+          {
+            class: 'btn',
+            style: 'justify-content:flex-start',
+            onclick: () => {
+              closeModal();
+              openSplitDialog(segIndex);
+            },
+          },
+          '✂ 这一段里有两人的话 → 拆开',
+        ),
         h('div', { class: 'hint', style: 'margin-top:10px' },
           '改归属只影响这一段。想改这个说话人的名字（所有段落一起变），点下面的按钮。'),
         h(
@@ -318,6 +331,85 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
       // 没有 onConfirm，showModal 只会渲染一个按钮，文字取 cancelText。
       // 之前传了空串，渲染出一个空白按钮。
       cancelText: '关闭',
+    });
+  };
+
+  /**
+   * 段落拆分对话框。
+   *
+   * 列出所有可以切开的位置（优先句读处），点哪个就在哪切。
+   * 「一句里有两个人在说话」这种情况自动分段切不出来，只能人工指定。
+   */
+  const openSplitDialog = (segIndex: number): void => {
+    const seg = task.segments[segIndex];
+    if (!seg) return;
+
+    /** 候选切分点：句读之后优先，其次每个字符位置。 */
+    const candidates = (): number[] => {
+      const text = seg.text;
+      const out: number[] = [];
+      // 句读后
+      for (let i = 0; i < text.length; i += 1) {
+        if ('。！？；'.includes(text[i]) && i + 1 < text.length) out.push(i + 1);
+      }
+      // 逗号后
+      for (let i = 0; i < text.length; i += 1) {
+        if ('，、'.includes(text[i]) && i + 1 < text.length) out.push(i + 1);
+      }
+      // 每个字符位置兜底（长句里可能没有标点）
+      for (let i = 1; i < text.length; i += 1) out.push(i);
+      return [...new Set(out)];
+    };
+
+    const points = candidates();
+    const rowEls: HTMLElement[] = [];
+
+    const list = h('div', { class: 'split-list' });
+    for (const p of points.slice(0, 40)) {
+      const before = seg.text.slice(Math.max(0, p - 12), p);
+      const after = seg.text.slice(p, p + 12);
+      const isPunct = '。！？；，、'.includes(seg.text[p - 1]);
+      const row = h(
+        'button',
+        {
+          class: `split-point${isPunct ? ' split-point-punct' : ''}`,
+          type: 'button',
+          onclick: () => {
+            for (const r of rowEls) r.classList.remove('on');
+            row.classList.add('on');
+            void doSplit(p);
+          },
+        },
+        h('span', { class: 'split-before' }, `${Math.max(0, p - 12) > 0 ? '…' : ''}${before}`),
+        h('span', { class: 'split-mark' }, '｜'),
+        h('span', { class: 'split-after' }, `${after}${p + 12 < seg.text.length ? '…' : ''}`),
+      );
+      rowEls.push(row);
+      list.appendChild(row);
+    }
+
+    const doSplit = async (cut: number): Promise<void> => {
+      try {
+        await api.splitSegment(task.id, segIndex, cut);
+        closeModal();
+        toast('已拆开，可以分别标注了', 'ok');
+        void renderTaskDetail(root, task.id);
+      } catch (err) {
+        toast(err instanceof Error ? err.message : String(err), 'err');
+      }
+    };
+
+    showModal({
+      title: '在哪里拆开？',
+      wide: true,
+      body: h(
+        'div',
+        null,
+        h('div', { class: 'tiny muted', style: 'margin-bottom:10px' }, '点一条线，就在那里切开：'),
+        h('div', { class: 'alert info', style: 'margin-bottom:12px;font-size:12.5px' }, seg.text),
+        list,
+      ),
+      cancelText: '取消',
     });
   };
 

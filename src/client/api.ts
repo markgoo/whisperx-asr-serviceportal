@@ -111,6 +111,13 @@ export const api = {
       body: JSON.stringify({ updates }),
     }),
 
+  /** 把一段在指定字符位置拆成两段 */
+  splitSegment: (id: number, index: number, cut: number) =>
+    request<{ task: TaskDetail; pieces: number }>(`/tasks/${id}/segments/split`, {
+      method: 'POST',
+      body: JSON.stringify({ index, cut }),
+    }),
+
   /** 用人工标注的段落做种子，重新分析其他段落的说话人 */
   reanalyzeSpeakers: (id: number) =>
     request<{ task: TaskDetail; changed: number; seeds: number; elapsedMs: number }>(

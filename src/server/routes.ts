@@ -64,6 +64,7 @@ import { cancelTask, enqueue, isRunning } from './worker';
 import { checkAsrHealth, type AsrSegment } from './asrClient';
 import { checkPuncHealth, classifySpans, punctuateTexts } from './puncClient';
 import { rebuildSegments } from './reprocessor';
+import { splitSegment } from './splitSegment';
 import { loadTaskWords } from './taskWords';
 import {
   applySpeakerUpdates,
@@ -821,6 +822,57 @@ api.post(
   }),
 );
 
+/**
+ * 把一段拆成两段。
+ *
+ * 一段里常常混着两个人的话，自动分段切不出来时只能人工指定在哪切开。
+ * 时间用词级时间戳换算，比按字符比例估算准。
+ */
+api.post(
+  '/tasks/:id/segments/split',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = requireUser(req);
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    if (task.status !== 'completed') throw badRequest('只能修改已完成的任务');
+
+    const index = Number(req.body?.index);
+    const cut = Number(req.body?.cut);
+    if (!Number.isInteger(index) || !Number.isInteger(cut)) {
+      throw badRequest('需要 index 和 cut 两个整数参数');
+    }
+
+    const segments = safeParseSegments(task.result_json) as LabeledSegment[];
+    if (index < 0 || index >= segments.length) throw badRequest('段落索引超出范围');
+
+    const seg = segments[index];
+    const stored = loadTaskWords(task.id);
+    const pieces = splitSegment(seg, seg.text, [cut], stored?.words);
+    if (!pieces) throw badRequest('切分点位置无效（可能落在开头或末尾）');
+
+    // 拆出来的段落沿用原说话人，标记 manual 让用户接着改
+    const replacement: LabeledSegment[] = pieces.map((p) => ({
+      start: p.start,
+      end: p.end,
+      text: p.text,
+      speaker: seg.speaker,
+      manual: true,
+    }));
+
+    segments.splice(index, 1, ...replacement);
+
+    const speakers = new Set<string>();
+    for (const s of segments) if (s.speaker) speakers.add(s.speaker);
+
+    getDb()
+      .prepare('UPDATE tasks SET result_json = ?, segment_count = ?, speaker_count = ? WHERE id = ?')
+      .run(JSON.stringify(segments), segments.length, speakers.size, task.id);
+    audit(user.id, user.username, 'task_segment_split', `#${task.id} 第 ${index + 1} 段`);
+
+    const fresh = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;
+    res.json({ task: toTaskDetailDto(fresh, ownerName(fresh.user_id)), pieces: replacement.length });
+  }),
+);
 api.post(
   '/tasks/:id/reprocess',
   requireAuth,

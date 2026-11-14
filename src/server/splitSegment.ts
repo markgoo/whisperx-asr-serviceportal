@@ -44,9 +44,30 @@ export function splitSegment(
   if (pieces.length < 2) return null;
 
   // 优先用词级时间戳：找出落在原段范围内的词，按字符累计分配
-  const inside = (words ?? []).filter(
+  //
+  // 两个坑：
+  // 1. 标点得并回前一个词。whisperx 会给标点单独一个 token，还把真实停顿
+  //    算进它的时长（实测一个「,」占 3.37 秒），不合并按字符映射会错位。
+  // 2. 光按时间过滤不够。段落被拆过之后文本变短了，但时间窗口仍会捞到
+  //    后面段落的词（实测 16 字的段取到 30 个词），字符映射整体偏移。
+  //    所以按字符数截断，只取覆盖本段文本的那几个词。
+  const PUNCT_ONLY = /^[，。？！；、,.;?!：:…—]+$/;
+  const rawInside = (words ?? []).filter(
     (w) => w.start >= segment.start - 0.3 && w.end <= segment.end + 0.3,
   );
+  const inside: AsrWord[] = [];
+  let covered = 0;
+  for (const w of rawInside) {
+    if (covered >= segment.text.length) break;
+    const last = inside[inside.length - 1];
+    if (last && PUNCT_ONLY.test(w.word)) {
+      last.word += w.word;
+      last.end = Math.max(last.end, w.end);
+    } else {
+      inside.push({ ...w });
+      covered += w.word.length;
+    }
+  }
 
   if (inside.length >= pieces.length) {
     // 用词把「字符位置」映射到「时间」：逐词累加字符数
