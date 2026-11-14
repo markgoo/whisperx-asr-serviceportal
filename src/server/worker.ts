@@ -7,8 +7,10 @@ import { getDb, getSettings } from './db';
 import { transcribeAudio, AsrError, type AsrSegment } from './asrClient';
 import { assertInsideUploads } from './storage';
 import { normalizeSegments, normalizeText, parseTermsText, type NormalizeOptions } from './normalizer';
+import path from 'node:path';
+import { DATA_DIR } from './config';
 import { DEFAULT_SPLIT, mergeShortSegments, punctuate, smoothSpeakers, splitByPause } from './segmenter';
-import { punctuateTexts } from './puncClient';
+import { detectSilence, punctuateTexts } from './puncClient';
 import { nowIso } from './util';
 import type { TaskRow } from './types';
 
@@ -189,8 +191,35 @@ async function runTask(task: TaskRow): Promise<void> {
       ...DEFAULT_SPLIT,
       pauseSec: settings.splitPauseSec,
     };
+
+    // 先问 VAD 要真实静音区间。whisperx 的词时长会把「字被拖长」当成停顿，
+    // 用它切分会把「这棵树」切成「这棵|树」。VAD 看音频能量，不受影响。
+    // 服务不可用时退回按词时长估算。
+    let silence: Array<[number, number]> | undefined;
+    if (settings.puncEnabled && settings.puncServiceUrl) {
+      try {
+        // punc 容器只读挂载了门户的 data 卷，所以传内部路径而不是上传文件
+        // punc 容器把门户的 data 卷只读挂在 /data，
+        // 所以把宿主机路径换算成容器内的相对路径传过去
+        const rel = path.relative(DATA_DIR, task.storage_path || '');
+        const containerPath = `/data/${rel.split(path.sep).join('/')}`;
+        const vad = await detectSilence(settings.puncServiceUrl, containerPath);
+        // 只保留够长的静音当切分依据。短静音（0.1-0.4 秒）是说话时的自然断句，
+        // 拿它们切分会把句子剁成碎片。
+        const MIN_VAD_GAP = 0.5;
+        silence = vad.gaps.filter(([a, b]) => b - a >= MIN_VAD_GAP);
+        log(
+          `任务 #${task.id} VAD: ${vad.speech.length} 个语音段、${vad.gaps.length} 个静音` +
+            `（取 ${silence.length} 个 >= ${MIN_VAD_GAP}s 的作为切分点）`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`任务 #${task.id} VAD 不可用，退回按词时长估算停顿：${msg}`);
+      }
+    }
+
     const splitSegments = settings.splitEnabled
-      ? mergeShortSegments(splitByPause(rawSegments, result.words, splitOpts))
+      ? mergeShortSegments(splitByPause(rawSegments, result.words, splitOpts, silence))
       : mergeShortSegments(rawSegments.map((s) => ({ ...s, text: punctuate(s.text) })));
 
     // 说话人平滑：diarization 的切换点有抖动，会切出 0.1 秒的碎片和

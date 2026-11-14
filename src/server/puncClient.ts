@@ -11,6 +11,14 @@ import http from 'node:http';
 import https from 'node:https';
 import { URL } from 'node:url';
 
+export interface VadResult {
+  /** 语音段 [[start, end], ...] 秒 */
+  speech: Array<[number, number]>;
+  /** 相邻语音段之间的静音 [[start, end], ...] 秒 */
+  gaps: Array<[number, number]>;
+  elapsedMs: number;
+}
+
 export interface PuncResult {
   texts: string[];
   elapsedMs: number;
@@ -19,9 +27,14 @@ export interface PuncResult {
 /** 单次请求的段数上限，避免一次塞太多把服务压住。 */
 const MAX_BATCH = 100;
 
-function postJson(urlStr: string, payload: unknown, timeoutMs: number): Promise<unknown> {
+function postJsonTo(
+  baseUrl: string,
+  pathName: string,
+  payload: unknown,
+  timeoutMs: number,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const u = new URL('/punc', urlStr.endsWith('/') ? urlStr : `${urlStr}/`);
+    const u = new URL(pathName, baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`);
     const body = Buffer.from(JSON.stringify(payload), 'utf8');
     const isHttps = u.protocol === 'https:';
     const transport = isHttps ? https : http;
@@ -86,7 +99,7 @@ export async function punctuateTexts(
   for (let i = 0; i < cleaned.length; i += MAX_BATCH) {
     const batch = cleaned.slice(i, i + MAX_BATCH);
     const started = Date.now();
-    const res = (await postJson(baseUrl, { texts: batch }, timeoutMs)) as PuncResult;
+    const res = (await postJsonTo(baseUrl, '/punc', { texts: batch }, timeoutMs)) as PuncResult;
     elapsed += Date.now() - started;
     if (!Array.isArray(res.texts) || res.texts.length !== batch.length) {
       throw new Error('标点服务返回的段数与请求不一致');
@@ -95,6 +108,24 @@ export async function punctuateTexts(
   }
 
   return { texts: out, elapsedMs: elapsed };
+}
+
+/**
+ * 调 VAD 接口，拿语音段之间的静音区间。
+ *
+ * 传的是服务端路径而不是文件内容——punc 容器只读挂载了门户的 data 卷，
+ * 这样上百 MB 的录音不用再传一遍。
+ */
+export async function detectSilence(
+  baseUrl: string,
+  audioPath: string,
+  timeoutMs = 120_000,
+): Promise<VadResult> {
+  const res = (await postJsonTo(baseUrl, '/vad', { path: audioPath }, timeoutMs)) as VadResult;
+  if (!Array.isArray(res.speech) || !Array.isArray(res.gaps)) {
+    throw new Error('VAD 服务返回结构不正确');
+  }
+  return res;
 }
 
 /** 健康检查，供设置页「测试连接」用。 */

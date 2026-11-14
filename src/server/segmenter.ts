@@ -497,9 +497,28 @@ export function splitByPause(
   segments: AsrSegment[],
   words: AsrWord[],
   opts: SplitOptions = DEFAULT_SPLIT,
+  /**
+   * VAD 给出的静音区间 [[start, end], ...]（秒）。
+   *
+   * 优先用它判断停顿。whisperx 的词级时间戳会把「字被拖长」和「真实停顿」
+   * 混在一起——实测一个「棵」字能被给到 2.2 秒、一个「?」能被给到 6.15 秒，
+   * 从时长反推会把「这棵树」切碎。VAD 看音频能量，不受这个影响。
+   *
+   * 没传或为空时退回原来的 pauseAfter 估算。
+   */
+  silence?: Array<[number, number]>,
 ): AsrSegment[] {
   const withPunct = (text: string, forceEnd = false): string =>
     opts.addPunctuation ? punctuate(text, forceEnd) : text;
+
+  /** 时间点落在哪个静音区间里，返回该静音时长；没有则返回 0。 */
+  const silenceAt = (t: number): number => {
+    if (!silence || !silence.length) return 0;
+    for (const [a, b] of silence) {
+      if (t >= a - 0.05 && t <= b + 0.05) return b - a;
+    }
+    return 0;
+  };
 
   if (!words.length || !segments.length) {
     return segments.map((s, i) => ({
@@ -535,9 +554,28 @@ export function splitByPause(
     const block = blocks[bi];
     const isLastBlock = bi === blocks.length - 1;
 
-    const inside = block.words;
+    // 把标点并回前一个词。
+    //
+    // whisperx 的对齐会给标点符号单独一个 token，还把**真实停顿算进它的时长**：
+    //   9.34- 9.36 呢
+    //   9.36-15.51 ?     ← 6.15 秒，其实是「呢」和下一个「选」之间的停顿
+    // 不处理的话，切点会落在标点前后，把「这棵树」切成「这棵」+「树」。
+    // 合并后停顿就算在词边界上，切点才是对的。
+    const PUNCT_ONLY = /^[，。？！；、,.;?!：:…—]+$/;
+    const merged: AsrWord[] = [];
+    for (const w of block.words) {
+      const last = merged[merged.length - 1];
+      if (last && PUNCT_ONLY.test(w.word)) {
+        last.word += w.word;
+        last.end = Math.max(last.end, w.end);
+      } else {
+        merged.push({ ...w });
+      }
+    }
+    const inside = merged;
     const fallbackText = block.texts.join('');
 
+    // 用词重建文本，同时记录每个词边界处的停顿
     if (inside.length < 2) {
       out.push({ start: block.start, end: block.end, speaker: block.speaker, text: withPunct(fallbackText, isLastBlock) });
       continue;
@@ -547,7 +585,14 @@ export function splitByPause(
     let text = '';
     const pauses: { pos: number; dur: number }[] = [];
     for (let i = 0; i < inside.length; i += 1) {
-      if (i > 0) pauses.push({ pos: text.length, dur: pauseAfter(inside[i - 1], inside[i]) });
+      if (i > 0) {
+        const prevWord = inside[i - 1];
+        const curWord = inside[i];
+        // 有 VAD 数据就用它：看「这两个词之间的时间点」落在哪个静音区间
+        const vadGap = silenceAt((prevWord.end + curWord.start) / 2);
+        const dur = silence && silence.length ? vadGap : pauseAfter(prevWord, curWord);
+        pauses.push({ pos: text.length, dur });
+      }
       text += inside[i].word;
     }
 
@@ -576,47 +621,66 @@ export function splitByPause(
       return best;
     };
 
-    const marks: number[] = [];
+    // 停顿分两级：
+    //   >= pauseSec      强边界，直接分段（对话里换人几乎都落在这里）
+    //   >= commaPauseSec 弱边界，段内加逗号
+    //
+    // 之前只用了 commaPauseSec，所有停顿都变成逗号，pauseSec 从没生效过。
+    // 后果很明显：whisperx 会把真实停顿算进标点符号的时长（实测一个「?」
+    // 被赋予 6.15 秒），这种明确的换人边界被当成普通逗号，两个人就被并进一段。
+    const durAt = (pos: number): number =>
+      pauses.reduce((best, p) => (snap(p.pos) === pos ? Math.max(best, p.dur) : best), 0);
+
+    const strongMarks: number[] = [];
+    const weakMarks: number[] = [];
     for (const p of pauses) {
       if (p.dur < opts.commaPauseSec) continue;
       const at = snap(p.pos);
       if (at === null || at <= 0 || at >= text.length) continue;
       // 别切在黏着字前面（「竞争/者」「用它的/GPU」这类）
       if (clingsForward(text, at)) continue;
-      marks.push(at);
+      if (p.dur >= opts.pauseSec) strongMarks.push(at);
+      else weakMarks.push(at);
     }
 
-    // 逗号数量上限：大约每 14 个字一个。
-    // 词级对齐有噪声，不加限制会冒出「牺牲了几，十万人」这种错逗号；
-    // 这里只保留停顿最长的几个。
+    // 强边界成为分段点，但要求切开后两侧都够长。
+    // 「棵」被拖长到 1-2 秒时会被误判成停顿，切出来是「选在这棵|树吗」
+    // 这种碎片。要求最小字数能滤掉大部分这类误判，真实停顿（问号后
+    // 5-6 秒那种）通常两侧都有完整的内容。
+    const MIN_SEG_CHARS = 6;
+    const strongSorted = [...new Set(strongMarks)].sort((a, b) => a - b);
+    const cuts: number[] = [];
+    let lastCut = 0;
+    for (const at of strongSorted) {
+      if (at - lastCut < MIN_SEG_CHARS) continue;
+      if (text.length - at < MIN_SEG_CHARS) continue;
+      cuts.push(at);
+      lastCut = at;
+    }
+
+    // 逗号：只从弱边界里选，避免和分段点重复
     const maxCommas = Math.max(1, Math.floor(text.length / 14));
-    const ranked = [...new Set(marks)]
-      .map((pos) => ({
-        pos,
-        dur: pauses.reduce((best, p) => (snap(p.pos) === pos ? Math.max(best, p.dur) : best), 0),
-      }))
+    const uniqueMarks = [...new Set(weakMarks)]
+      .map((pos) => ({ pos, dur: durAt(pos) }))
       .sort((a, b) => b.dur - a.dur)
       .slice(0, maxCommas)
-      .sort((a, b) => a.pos - b.pos);
-    const uniqueMarks = ranked.map((x) => x.pos);
+      .sort((a, b) => a.pos - b.pos)
+      .map((x) => x.pos);
 
+    // 切完还太长，再从段内的逗号位置细分
     const duration = block.end - block.start;
     const durationCuts = Math.max(0, Math.ceil(duration / opts.maxSegmentSec) - 1);
     const charCuts = Math.max(0, Math.ceil(text.length / opts.maxSegmentChars) - 1);
     const wantCuts = Math.max(durationCuts, charCuts);
-
-    let cuts: number[] = [];
     if (wantCuts > 0 && uniqueMarks.length) {
-      // 切点选停顿最长的几处；弱停顿留在段内当逗号
-      cuts = uniqueMarks
-        .map((pos) => ({
-          pos,
-          dur: pauses.reduce((b, p) => (snap(p.pos) === pos ? Math.max(b, p.dur) : b), 0),
-        }))
+      const extra = uniqueMarks
+        .map((pos) => ({ pos, dur: durAt(pos) }))
+        .filter((x) => !cuts.includes(x.pos))
         .sort((a, b) => b.dur - a.dur)
         .slice(0, wantCuts)
-        .map((x) => x.pos)
-        .sort((a, b) => a - b);
+        .map((x) => x.pos);
+      cuts.push(...extra);
+      cuts.sort((a, b) => a - b);
     }
 
     // 按切点切片，切点同时也是逗号位置

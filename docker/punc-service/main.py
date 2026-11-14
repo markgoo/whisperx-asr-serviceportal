@@ -28,12 +28,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = os.getenv("PUNC_MODEL", "ct-punc")
+VAD_MODEL = os.getenv("VAD_MODEL", "fsmn-vad")
 DEVICE = os.getenv("PUNC_DEVICE", "cpu")
 MAX_CHARS = int(os.getenv("PUNC_MAX_CHARS", "4000"))
 
 app = FastAPI(title="Punctuation Restoration Service", version="1.0.0")
 
 _model = None
+_vad_model = None
 
 
 def get_model():
@@ -57,6 +59,21 @@ class PuncResponse(BaseModel):
     elapsedMs: int
 
 
+class VadRequest(BaseModel):
+    path: str = Field(..., description="音频文件路径（服务端可读）")
+
+
+class VadResponse(BaseModel):
+    """语音段和它们之间的静音间隔。
+
+    speech: [[start_sec, end_sec], ...]
+    gaps:   [[start_sec, end_sec], ...]  相邻语音段之间的静音
+    """
+    speech: List[List[float]]
+    gaps: List[List[float]]
+    elapsedMs: int
+
+
 @app.on_event("startup")
 def preload():
     """启动时就加载模型。
@@ -68,6 +85,57 @@ def preload():
         get_model()
     except Exception as exc:
         logger.error(f"Model preload failed, will retry on first request: {exc}")
+
+
+@app.post("/vad", response_model=VadResponse)
+def vad(req: VadRequest):
+    """用 fsmn-vad 找出语音段，返回段之间的静音间隔。
+
+    为什么需要这个：whisperx 的词级时间戳会把「字被拖长」和「真实停顿」
+    混在一起（实测一个「棵」字可以是 1.2 秒、一个「?」可以是 6.15 秒），
+    从时间戳反推停顿会误判。VAD 看的是音频能量，不受这个影响。
+
+    只接受服务端能读到的路径，不接收上传的文件——调用方（门户）和本服务
+    共享同一个 data 卷，传路径省掉一次大文件传输。
+    """
+    from pathlib import Path
+
+    audio_path = Path(req.path)
+    if not audio_path.is_file():
+        raise HTTPException(404, f"文件不存在：{req.path}")
+
+    started = time.time()
+    model = get_vad_model()
+    try:
+        res = model.generate(input=str(audio_path))
+    except Exception as exc:
+        raise HTTPException(500, f"VAD 失败：{exc}") from exc
+
+    raw_spans = res[0].get("value") or []
+    speech = [[round(a / 1000, 3), round(b / 1000, 3)] for a, b in raw_spans]
+    speech.sort(key=lambda x: x[0])
+
+    gaps: List[List[float]] = []
+    for i in range(1, len(speech)):
+        prev_end = speech[i - 1][1]
+        cur_start = speech[i][0]
+        if cur_start > prev_end:
+            gaps.append([round(prev_end, 3), round(cur_start, 3)])
+
+    elapsed = int((time.time() - started) * 1000)
+    logger.info(f"VAD: {len(speech)} 个语音段, {len(gaps)} 个静音间隔, {elapsed}ms")
+    return VadResponse(speech=speech, gaps=gaps, elapsedMs=elapsed)
+
+
+def get_vad_model():
+    global _vad_model
+    if _vad_model is None:
+        logger.info("Loading VAD model")
+        from funasr import AutoModel
+
+        _vad_model = AutoModel(model=VAD_MODEL, device="cpu", disable_update=True)
+        logger.info("VAD model ready")
+    return _vad_model
 
 
 @app.get("/health")

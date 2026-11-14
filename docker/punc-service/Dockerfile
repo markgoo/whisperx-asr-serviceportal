@@ -11,10 +11,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# funasr 运行时要解码音频（即使这里只做文本标点），保持 libsndfile 可用
+# funasr 运行时要解码音频（即使这里只做文本标点），保持 libsndfile 可用。
+# ffmpeg 是 /vad 接口必需的：fsmn-vad 要解码 mp3/mp4。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libsndfile1 \
       build-essential \
+      ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # CPU 版 torch 单独装，避免默认源拉 CUDA 版（几个 GB 的浪费）
