@@ -74,6 +74,42 @@ class VadResponse(BaseModel):
     elapsedMs: int
 
 
+class SeedSpan(BaseModel):
+    """一段人工标注：这段时间是某个人在说。"""
+    start: float
+    end: float
+    speaker: str
+
+
+class TargetSpan(BaseModel):
+    """待分类的时间段。"""
+    start: float
+    end: float
+
+
+class ClassifyRequest(BaseModel):
+    path: str = Field(..., description="音频文件路径（服务端可读）")
+    seeds: List[SeedSpan] = Field(..., description="人工标注的样本，用来算每个说话人的声纹中心")
+    targets: List[TargetSpan] = Field(..., description="需要判断归属的时间段")
+
+
+class ClassifyResult(BaseModel):
+    speaker: str | None
+    score: float
+    margin: float
+
+
+class ClassifyResponse(BaseModel):
+    """按人工标注做最近邻分类。
+
+    每个 target 返回最像的说话人、相似度、以及和次优的差距（margin）。
+    margin 小说明两个人都像，结果不可靠——调用方可以用它决定要不要提示用户确认。
+    """
+    results: List[ClassifyResult]
+    centers: dict
+    elapsedMs: int
+
+
 @app.on_event("startup")
 def preload():
     """启动时就加载模型。

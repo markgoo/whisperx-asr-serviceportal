@@ -322,7 +322,7 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
   const curTextEl = h('div', { class: 'player-text' }, hasAudio ? '点上方任意一句，从那里开始播放' : '录音文件已被清理，无法回放');
   const barFill = h('span', { style: 'width:0%' });
   const bar = h('div', { class: 'player-bar' }, barFill);
-  const playBtn = h('button', { class: 'player-play', type: 'button', title: '播放/暂停' }, '▶');
+  const playBtn = h('button', { class: 'player-play', type: 'button', title: '播放' }, '▶');
 
   const seekTo = (ratio: number): void => {
     if (!hasAudio || !Number.isFinite(audio.duration) || audio.duration <= 0) return;
@@ -382,20 +382,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
       h(
         'div',
         { class: 'player-ctl' },
-        h(
-          'button',
-          {
-            class: 'player-play',
-            type: 'button',
-            title: '播放 / 暂停',
-            onclick: () => {
-              if (!hasAudio) return;
-              if (audio.paused) void audio.play().catch(() => undefined);
-              else audio.pause();
-            },
-          },
-          '▶',
-        ),
+        // 复用 playBtn：它的文字由 play/pause 事件维护（播放时显示 ❚❚）。
+        // 之前这里新建了一个按钮，状态永远停在 ▶。
+        playBtn,
         h(
           'div',
           { class: 'player-skips' },
@@ -645,9 +634,11 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
   audio.addEventListener('loadedmetadata', syncPlayer);
   audio.addEventListener('play', () => {
     playBtn.textContent = '❚❚';
+    playBtn.title = '暂停';
   });
   audio.addEventListener('pause', () => {
     playBtn.textContent = '▶';
+    playBtn.title = '播放';
     syncPlayer();
   });
 
