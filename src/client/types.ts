@@ -85,6 +85,8 @@ export interface Settings {
   allowRegistration: boolean;
   puncServiceUrl: string;
   puncEnabled: boolean;
+  splitEnabled: boolean;
+  splitPauseSec: number;
   normalizeEnabled: boolean;
   normalizeToSimplified: boolean;
   normalizeTerms: string;

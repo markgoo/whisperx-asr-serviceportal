@@ -54,8 +54,10 @@ import {
 } from './storage';
 import { loadTaskFor, requireUser } from './tasks-service';
 import { cancelTask, enqueue, isRunning } from './worker';
-import { checkAsrHealth } from './asrClient';
-import { checkPuncHealth } from './puncClient';
+import { checkAsrHealth, type AsrSegment } from './asrClient';
+import { checkPuncHealth, punctuateTexts } from './puncClient';
+import { rebuildSegments } from './reprocessor';
+import { loadTaskWords } from './taskWords';
 import type { AppSettings, PublicUser, StorageItem, TaskRow, UserRow } from './types';
 
 export const api = express.Router();
@@ -406,6 +408,17 @@ api.put(
     if (body.puncEnabled !== undefined) {
       setSetting('punc_enabled', boolish(body.puncEnabled, true) ? '1' : '0');
     }
+    // 分段参数：之前没在这里处理，导致改了也不生效
+    if (body.splitEnabled !== undefined) {
+      setSetting('split_enabled', boolish(body.splitEnabled, true) ? '1' : '0');
+    }
+    if (body.splitPauseSec !== undefined) {
+      const sec = Number(body.splitPauseSec);
+      if (!Number.isFinite(sec) || sec < 0.1 || sec > 10) {
+        throw badRequest('分段停顿阈值需要是 0.1~10 之间的秒数');
+      }
+      setSetting('split_pause_sec', String(sec));
+    }
     if (body.normalizeEnabled !== undefined) {
       setSetting('normalize_enabled', boolish(body.normalizeEnabled, true) ? '1' : '0');
     }
@@ -704,14 +717,45 @@ api.post(
     };
     if (!opts.enabled) throw badRequest('结果修正已在设置中关闭');
 
-    // 规范化是幂等的（缩写合并、繁转简、术语替换都不会二次生效），
-    // 所以可以对已有结果直接再跑一遍，省去重新转写的等待。
-    const segments = normalizeSegments(safeParseSegments(task.result_json), opts);
-    const text = task.result_text ? normalizeText(task.result_text, opts) : '';
+    // 存过词级时间戳的任务，可以重跑**完整的分段**而不只是文本修正。
+    // 这是调分段逻辑时的关键：改完不用再等一次完整转写。
+    const stored = loadTaskWords(task.id);
+    let segments: AsrSegment[];
+    if (stored) {
+      segments = rebuildSegments(stored.segments, stored.words, stored.silence, {
+        splitEnabled: settings.splitEnabled,
+        splitPauseSec: settings.splitPauseSec,
+        normalize: opts,
+      });
+    } else {
+      // 老任务没存词级数据，只能重新套一遍文本修正（幂等）
+      segments = normalizeSegments(safeParseSegments(task.result_json), opts);
+    }
+
+    // 分段变了，标点也要重跑
+    if (segments.length && settings.puncEnabled && settings.puncServiceUrl) {
+      try {
+        const puncRes = await punctuateTexts(
+          settings.puncServiceUrl,
+          segments.map((s) => s.text),
+          180_000,
+        );
+        segments = segments.map((s, i) => ({ ...s, text: puncRes.texts[i] || s.text }));
+      } catch (err) {
+        console.warn(`[reprocess] 任务 #${task.id} 标点服务不可用：${String(err)}`);
+      }
+    }
+
+    const joined = segments.map((s) => s.text).join('');
+    const text = settings.normalizeEnabled ? normalizeText(joined, opts) : joined;
+    const speakers = new Set<string>();
+    for (const s of segments) if (s.speaker) speakers.add(s.speaker);
 
     getDb()
-      .prepare('UPDATE tasks SET result_text = ?, result_json = ?, segment_count = ? WHERE id = ?')
-      .run(text, JSON.stringify(segments), segments.length, task.id);
+      .prepare(
+        'UPDATE tasks SET result_text = ?, result_json = ?, segment_count = ?, speaker_count = ? WHERE id = ?',
+      )
+      .run(text, JSON.stringify(segments), segments.length, speakers.size, task.id);
     audit(user.id, user.username, 'task_reprocess', `#${task.id}`);
 
     const fresh = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;

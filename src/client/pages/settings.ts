@@ -172,6 +172,50 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
     ),
   );
 
+  // ---- 分段 --------------------------------------------------------------
+  const splitEnabled = h('input', { type: 'checkbox', checked: settings.splitEnabled }) as HTMLInputElement;
+  const splitPauseSec = h('input', {
+    type: 'number',
+    step: '0.05',
+    min: '0.1',
+    max: '10',
+    value: String(settings.splitPauseSec ?? 0.45),
+  }) as HTMLInputElement;
+
+  const splitCard = h(
+    'div',
+    { class: 'card' },
+    h('div', { class: 'card-head' }, h('h2', null, '分段')),
+    h(
+      'div',
+      { class: 'card-body' },
+      h(
+        'div',
+        { class: 'alert info', style: 'font-size:12.5px' },
+        '转写结果按停顿切开，长句不会挤成一整段。停顿阈值决定多长的静音才算「换句」：',
+        '调小切得细，调大切得整。改了之后对已完成的任务点「重新修正」即可生效，不用重新转写。',
+      ),
+      h(
+        'div',
+        { class: 'switch', style: 'margin-bottom:14px' },
+        splitEnabled,
+        h(
+          'div',
+          null,
+          h('div', { class: 'switch-text' }, '按停顿重切分段'),
+          h('div', { class: 'switch-sub' }, '关闭后每段就是 whisper 原本的切法'),
+        ),
+      ),
+      h(
+        'div',
+        { class: 'field', style: 'margin-bottom:0' },
+        h('label', null, '强停顿阈值（秒）'),
+        splitPauseSec,
+        h('div', { class: 'hint' }, '静音超过这个长度就当作换句点，默认 0.45'),
+      ),
+    ),
+  );
+
   // ---- defaults ----------------------------------------------------------
   const defaultsCard = h(
     'div',
@@ -303,6 +347,8 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
             storageRetainDays: Number(retain.value) || 0,
             puncServiceUrl: puncUrl.value.trim(),
             puncEnabled: puncEnabled.checked,
+            splitEnabled: splitEnabled.checked,
+            splitPauseSec: Number(splitPauseSec.value) || 0.45,
             normalizeEnabled: normEnabled.checked,
             normalizeToSimplified: normS2T.checked,
             normalizeTerms: normTerms.value,
@@ -332,6 +378,7 @@ export async function renderSettings(root: HTMLElement): Promise<void> {
       asrCard,
       defaultsCard,
       puncCard,
+      splitCard,
       normCard,
       storageCard,
       h('div', { class: 'row', style: 'margin-top:16px' }, h('div', { class: 'spacer' }), saveBtn),

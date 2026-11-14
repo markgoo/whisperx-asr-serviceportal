@@ -9,7 +9,8 @@ import { assertInsideUploads } from './storage';
 import { normalizeSegments, normalizeText, parseTermsText, type NormalizeOptions } from './normalizer';
 import path from 'node:path';
 import { DATA_DIR } from './config';
-import { DEFAULT_SPLIT, mergeShortSegments, punctuate, smoothSpeakers, splitByPause } from './segmenter';
+import { rebuildSegments } from './reprocessor';
+import { saveTaskWords } from './taskWords';
 import { detectSilence, punctuateTexts } from './puncClient';
 import { nowIso } from './util';
 import type { TaskRow } from './types';
@@ -186,12 +187,6 @@ async function runTask(task: TaskRow): Promise<void> {
 
     const rawSegments: AsrSegment[] = result.segments;
 
-    // 1. 按停顿重切分段：长句不再挤成一坨，同时给缺标点的句子补句读
-    const splitOpts = {
-      ...DEFAULT_SPLIT,
-      pauseSec: settings.splitPauseSec,
-    };
-
     // 先问 VAD 要真实静音区间。whisperx 的词时长会把「字被拖长」当成停顿，
     // 用它切分会把「这棵树」切成「这棵|树」。VAD 看音频能量，不受影响。
     // 服务不可用时退回按词时长估算。
@@ -218,21 +213,26 @@ async function runTask(task: TaskRow): Promise<void> {
       }
     }
 
-    const splitSegments = settings.splitEnabled
-      ? mergeShortSegments(splitByPause(rawSegments, result.words, splitOpts, silence))
-      : mergeShortSegments(rawSegments.map((s) => ({ ...s, text: punctuate(s.text) })));
-
-    // 说话人平滑：diarization 的切换点有抖动，会切出 0.1 秒的碎片和
-    // A→B→A 的假换人。这一步把碎片并回去，并把夹在中间的短句归给前后同一人。
-    const smoothedSegments = smoothSpeakers(splitSegments);
-
-    // 2. 后处理：合并拆开的英文/数字、修术语、繁转简、截掉尾部重复
+    // 2. 后处理：按停顿重切分段 + 说话人平滑 + 文本规范化。
+    //    和「重新修正」走同一个函数，保证两条路径产出一致。
     const normOpts: NormalizeOptions = {
       enabled: settings.normalizeEnabled,
       toSimplified: settings.normalizeToSimplified,
       terms: parseTermsText(settings.normalizeTerms),
     };
-    let segments = normalizeSegments(smoothedSegments, normOpts);
+    let segments = rebuildSegments(rawSegments, result.words, silence, {
+      splitEnabled: settings.splitEnabled,
+      splitPauseSec: settings.splitPauseSec,
+      normalize: normOpts,
+    });
+
+    // 存下词级时间戳：以后改分段逻辑时「重新修正」可以直接重跑，
+    // 不用再等一次完整转写（1 小时录音要等 20 分钟）
+    try {
+      saveTaskWords(task.id, { segments: rawSegments, words: result.words, silence });
+    } catch (err) {
+      log(`任务 #${task.id} 词级数据保存失败：${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // 3. 模型标点：用 CT-Punc 重判标点，替换掉启发式的结果。
     //    服务不可用就保留启发式，绝不能让标点问题导致转写失败。

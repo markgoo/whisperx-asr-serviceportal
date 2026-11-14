@@ -37,6 +37,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
+-- 词级时间戳，单独一张表。
+-- 放这里而不是塞进 tasks：tasks 的列表查询用 SELECT *，
+-- 带上几 MB 的 JSON 会把列表拖慢。
+CREATE TABLE IF NOT EXISTS task_words (
+  task_id    INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  payload    TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
