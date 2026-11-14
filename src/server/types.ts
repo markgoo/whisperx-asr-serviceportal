@@ -73,6 +73,8 @@ export interface SegmentDto {
   end: number;
   text: string;
   speaker?: string | null;
+  /** 用户手动指定过说话人归属（作为重新分析的种子） */
+  manual?: boolean;
 }
 
 export interface SpeakerLine {

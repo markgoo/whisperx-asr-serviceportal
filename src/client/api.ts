@@ -103,6 +103,20 @@ export const api = {
     request<{ task: Task }>(`/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
   retryTask: (id: number) => request<{ task: Task }>(`/tasks/${id}/retry`, { method: 'POST' }),
   reprocessTask: (id: number) => request<{ task: Task }>(`/tasks/${id}/reprocess`, { method: 'POST' }),
+
+  /** 改某几段的说话人归属（人工标注，只影响这几段） */
+  assignSpeakers: (id: number, updates: Array<{ index: number; speaker: string | null }>) =>
+    request<{ task: TaskDetail; applied: number }>(`/tasks/${id}/speakers/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ updates }),
+    }),
+
+  /** 用人工标注的段落做种子，重新分析其他段落的说话人 */
+  reanalyzeSpeakers: (id: number) =>
+    request<{ task: TaskDetail; changed: number; seeds: number; elapsedMs: number }>(
+      `/tasks/${id}/speakers/reanalyze`,
+      { method: 'POST' },
+    ),
   renameSpeakers: (id: number, names: Record<string, string>) =>
     request<{ task: TaskDetail }>(`/tasks/${id}/speakers`, {
       method: 'PATCH',

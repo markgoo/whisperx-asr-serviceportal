@@ -2,7 +2,14 @@ import express from 'express';
 import multer from 'multer';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ALLOWED_AUDIO_EXTENSIONS, DATABASE_FILE, MAX_UPLOAD_MB, SESSION_DAYS, UPLOAD_DIR } from './config';
+import {
+  ALLOWED_AUDIO_EXTENSIONS,
+  DATA_DIR,
+  DATABASE_FILE,
+  MAX_UPLOAD_MB,
+  SESSION_DAYS,
+  UPLOAD_DIR,
+} from './config';
 import {
   SESSION_COOKIE,
   cookieOptions,
@@ -55,9 +62,15 @@ import {
 import { loadTaskFor, requireUser } from './tasks-service';
 import { cancelTask, enqueue, isRunning } from './worker';
 import { checkAsrHealth, type AsrSegment } from './asrClient';
-import { checkPuncHealth, punctuateTexts } from './puncClient';
+import { checkPuncHealth, classifySpans, punctuateTexts } from './puncClient';
 import { rebuildSegments } from './reprocessor';
 import { loadTaskWords } from './taskWords';
+import {
+  applySpeakerUpdates,
+  collectSeeds,
+  type LabeledSegment,
+  type SpeakerUpdate,
+} from './segmentLabels';
 import type { AppSettings, PublicUser, StorageItem, TaskRow, UserRow } from './types';
 
 export const api = express.Router();
@@ -698,6 +711,113 @@ api.patch(
 
     const fresh = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;
     res.json({ task: toTaskDetailDto(fresh, ownerName(fresh.user_id)) });
+  }),
+);
+
+api.post(
+  '/tasks/:id/speakers/assign',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = requireUser(req);
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    if (task.status !== 'completed') throw badRequest('只能修改已完成的任务');
+
+    const raw = (req.body?.updates ?? []) as unknown;
+    if (!Array.isArray(raw) || !raw.length) throw badRequest('没有要修改的段落');
+
+    const updates: SpeakerUpdate[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const rec = item as Record<string, unknown>;
+      const index = Number(rec.index);
+      if (!Number.isInteger(index)) continue;
+      const speaker = rec.speaker === null ? null : String(rec.speaker ?? '');
+      updates.push({ index, speaker: speaker === '' ? null : speaker });
+    }
+    if (!updates.length) throw badRequest('没有有效的修改项');
+
+    const { segments, applied } = applySpeakerUpdates(safeParseSegments(task.result_json), updates);
+    if (!applied) {
+      return res.json({ task: toTaskDetailDto(task, ownerName(task.user_id)), applied: 0 });
+    }
+
+    const speakers = new Set<string>();
+    for (const s of segments) if (s.speaker) speakers.add(s.speaker);
+
+    getDb()
+      .prepare('UPDATE tasks SET result_json = ?, speaker_count = ? WHERE id = ?')
+      .run(JSON.stringify(segments), speakers.size, task.id);
+    audit(user.id, user.username, 'task_speaker_assign', `#${task.id} ×${applied}`);
+
+    const fresh = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;
+    res.json({ task: toTaskDetailDto(fresh, ownerName(fresh.user_id)), applied });
+  }),
+);
+
+/**
+ * 按人工标注重新分析说话人归属。
+ *
+ * 用用户手动标过的段落算每个说话人的声纹中心，再对没标过的段落做最近邻分类。
+ * 相比让模型自己聚类，这里「有几类、每类长什么样」都由人工确定，
+ * 是这套流程里最可靠的一环。
+ */
+api.post(
+  '/tasks/:id/speakers/reanalyze',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = requireUser(req);
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    if (task.status !== 'completed') throw badRequest('只能处理已完成的任务');
+
+    const settings = getSettings();
+    if (!settings.puncEnabled || !settings.puncServiceUrl) {
+      throw badRequest('需要先启用标点服务（它也提供声纹分析）');
+    }
+    if (!task.storage_path) throw badRequest('音频文件已被删除，无法重新分析');
+
+    const segments = safeParseSegments(task.result_json) as LabeledSegment[];
+    const seeds = collectSeeds(segments);
+    const seedSpeakers = new Set(seeds.map((s) => s.speaker));
+    if (seedSpeakers.size < 2) {
+      throw badRequest(`至少需要把两段标注成不同的人（当前只有 ${seedSpeakers.size} 个）`);
+    }
+
+    // 只重分类没标过的段落：人工标注是正确答案，不覆盖
+    const targets = segments
+      .filter((s) => !s.manual)
+      .map((s) => ({ start: s.start, end: s.end }));
+    if (!targets.length) throw badRequest('所有段落都标注过了，没有需要分析的部分');
+
+    const rel = path.relative(DATA_DIR, task.storage_path);
+    const containerPath = `/data/${rel.split(path.sep).join('/')}`;
+
+    const result = await classifySpans(settings.puncServiceUrl, containerPath, seeds, targets);
+    let changed = 0;
+    let cursor = 0;
+    for (const seg of segments) {
+      if (seg.manual) continue;
+      const r = result.results[cursor];
+      cursor += 1;
+      if (r?.speaker && r.speaker !== seg.speaker) {
+        seg.speaker = r.speaker;
+        changed += 1;
+      }
+    }
+
+    const speakers = new Set<string>();
+    for (const s of segments) if (s.speaker) speakers.add(s.speaker);
+    getDb()
+      .prepare('UPDATE tasks SET result_json = ?, speaker_count = ? WHERE id = ?')
+      .run(JSON.stringify(segments), speakers.size, task.id);
+    audit(user.id, user.username, 'task_speaker_reanalyze', `#${task.id} 改了 ${changed} 段`);
+
+    const fresh = getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;
+    res.json({
+      task: toTaskDetailDto(fresh, ownerName(fresh.user_id)),
+      changed,
+      seeds: seeds.length,
+      elapsedMs: result.elapsedMs,
+    });
   }),
 );
 

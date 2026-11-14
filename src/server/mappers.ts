@@ -27,6 +27,8 @@ export function safeParseSegments(raw: string | null): SegmentDto[] {  if (!raw)
         end: Number(s.end) || 0,
         text: String(s.text),
         speaker: s.speaker ? String(s.speaker) : null,
+        // 必须保留：人工标注的标记丢失后，「按标注重新分析」会读不到种子
+        ...(s.manual ? { manual: true } : {}),
       }));
   } catch {
     return [];

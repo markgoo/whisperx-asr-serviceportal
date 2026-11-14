@@ -21,6 +21,8 @@ export interface Segment {
   end: number;
   text: string;
   speaker?: string | null;
+  /** 用户手动指定过归属（不参与自动重新分析） */
+  manual?: boolean;
 }
 
 export interface SpeakerLine {

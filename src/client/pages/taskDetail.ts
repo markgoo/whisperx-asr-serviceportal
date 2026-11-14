@@ -13,7 +13,7 @@ import {
   statusBadge,
   toast,
 } from '../dom';
-import { promptDialog, showModal } from '../ui';
+import { closeModal, promptDialog, showModal } from '../ui';
 import { navigate } from '../store';
 import type { Segment, TaskDetail } from '../types';
 
@@ -257,8 +257,73 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
   };
 
   /**
-   * 只改某一个说话人的名字。
-   * 传入原始标签，保存时以「当前已有的名字」为基础改动这一条，不会影响别人。
+   * 点说话人名弹出来的菜单。
+   *
+   * 「改名」和「改归属」是两个不同的操作，混在一起用户会搞不清：
+   *   - 改名：SPEAKER_00 → 「主持人」，全局生效，所有这个人的段落都变
+   *   - 改归属：只把**这一段**改成另一个人说的
+   */
+  const openSpeakerMenu = (spk: string, segIndex: number): void => {
+    const others = speakerOrder.filter((s) => s !== spk);
+
+    const pick = (target: string | null): void => {
+      closeModal();
+      void (async () => {
+        try {
+          await api.assignSpeakers(task.id, [{ index: segIndex, speaker: target }]);
+          toast('已更新归属', 'ok');
+          // 局部刷新：只重画列表和统计，播放位置不动
+          task.segments[segIndex].speaker = target;
+          task.segments[segIndex].manual = true;
+          renderFilters();
+          renderList();
+          renderStats();
+        } catch (err) {
+          toast(err instanceof Error ? err.message : String(err), 'err');
+        }
+      })();
+    };
+
+    showModal({
+      title: '这一段是谁说的？',
+      body: h(
+        'div',
+        { class: 'col', style: 'gap:8px' },
+        h(
+          'div',
+          { class: 'tiny muted', style: 'margin-bottom:4px' },
+          `当前：${labelOf(spk)}　（第 ${segIndex + 1} 段）`,
+        ),
+        ...others.map((s) =>
+          h(
+            'button',
+            { class: 'btn', style: 'justify-content:flex-start', onclick: () => pick(s) },
+            h('span', { class: 'chip-dot', style: `background:${colorOf(s)}` }),
+            ` 改成「${labelOf(s)}」说的`,
+          ),
+        ),
+        h(
+          'button',
+          { class: 'btn', style: 'justify-content:flex-start', onclick: () => pick(null) },
+          '✕ 标记为「不知道是谁」',
+        ),
+        h('div', { class: 'hint', style: 'margin-top:10px' },
+          '改归属只影响这一段。想改这个说话人的名字（所有段落一起变），点下面的按钮。'),
+        h(
+          'button',
+          { class: 'btn sm ghost', style: 'margin-top:6px', onclick: () => { closeModal(); openRenameOne(spk); } },
+          '✎ 修改「' + labelOf(spk) + '」的名字',
+        ),
+      ),
+      confirmText: '取消',
+      cancelText: '',
+    });
+  };
+
+
+  /**
+   * 只改某一个说话人的名字（全局生效）。
+   * 保存时以「当前已有的名字」为基础改动这一条，不会影响别人。
    */
   const openRenameOne = (spk: string): void => {
     const input = h('input', {
@@ -488,11 +553,11 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
               {
                 class: 'tspk tspk-edit',
                 style: `color:${colorOf(spk)};min-width:56px`,
-                title: `点击修改「${labelOf(spk)}」的名字`,
+                title: `点开可改名，或把这一段改成其他人说的`,
                 onclick: (ev: Event) => {
                   // 别触发整行的跳转播放
                   ev.stopPropagation();
-                  openRenameOne(spk);
+                  openSpeakerMenu(spk, i);
                 },
               },
               labelOf(spk),
@@ -590,6 +655,32 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
       filterHost.appendChild(chip);
     });
 
+    // 按人工标注重新分析：把手动标过的段当种子，重新判断其余段落
+    const markedCount = task.segments.filter((s) => s.manual && s.speaker).length;
+    filterHost.appendChild(
+      h(
+        'button',
+        {
+          class: 'btn sm ghost',
+          style: 'margin-left:auto',
+          disabled: markedCount < 2,
+          title:
+            markedCount > 0
+              ? '用已标注的段落做参照，重新判断其余段落是谁说的'
+              : '先把两段标注成不同的人，再点这里',
+          onclick: async () => {
+            try {
+              toast('正在按标注分析…', 'ok');
+              await api.reanalyzeSpeakers(task.id);
+              void renderTaskDetail(root, task.id);
+            } catch (err) {
+              toast(err instanceof Error ? err.message : String(err), 'err');
+            }
+          },
+        },
+        markedCount > 0 ? `↻ 按标注重新分析（${markedCount} 段）` : '↻ 按标注重新分析',
+      ),
+    );
   }
 
   // ---- 播放联动 ----------------------------------------------------------

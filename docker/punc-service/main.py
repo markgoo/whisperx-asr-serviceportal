@@ -19,6 +19,7 @@
 import logging
 import os
 import time
+from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, HTTPException
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 MODEL_NAME = os.getenv("PUNC_MODEL", "ct-punc")
 VAD_MODEL = os.getenv("VAD_MODEL", "fsmn-vad")
+SV_MODEL = os.getenv("SV_MODEL", "cam++")
 DEVICE = os.getenv("PUNC_DEVICE", "cpu")
 MAX_CHARS = int(os.getenv("PUNC_MAX_CHARS", "4000"))
 
@@ -134,8 +136,6 @@ def vad(req: VadRequest):
     只接受服务端能读到的路径，不接收上传的文件——调用方（门户）和本服务
     共享同一个 data 卷，传路径省掉一次大文件传输。
     """
-    from pathlib import Path
-
     audio_path = Path(req.path)
     if not audio_path.is_file():
         raise HTTPException(404, f"文件不存在：{req.path}")
@@ -208,3 +208,139 @@ def punc(req: PuncRequest):
     elapsed = int((time.time() - started) * 1000)
     logger.info(f"Punctuated {len(req.texts)} segment(s) in {elapsed}ms")
     return PuncResponse(texts=results, elapsedMs=elapsed)
+
+
+# ---------------------------------------------------------------------------
+# 按人工标注分类
+# ---------------------------------------------------------------------------
+
+_sv_model = None
+
+
+def get_sv_model():
+    """cam++ 声纹模型。CPU 推理，一个 3 秒片段约 40ms。"""
+    global _sv_model
+    if _sv_model is None:
+        logger.info("Loading speaker embedding model")
+        from funasr import AutoModel
+
+        _sv_model = AutoModel(model=SV_MODEL, device="cpu", disable_update=True, disable_pbar=True)
+        logger.info("Speaker embedding model ready")
+    return _sv_model
+
+
+def _read_audio(path: str):
+    """用 ffmpeg 解成 16k 单声道 float32。
+
+    soundfile 不支持 mp4，而镜像里已经有 ffmpeg（VAD 也要用）。
+    """
+    import subprocess
+
+    import numpy as np
+
+    out = subprocess.run(
+        ["ffmpeg", "-nostdin", "-i", path, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+        capture_output=True,
+        check=True,
+        timeout=600,
+    ).stdout
+    return np.frombuffer(out, dtype=np.float32), 16000
+
+
+def _embed_range(model, audio, sr: int, start: float, end: float):
+    """截一段时间提取声纹，返回归一化向量；太短或失败返回 None。
+
+    临时文件写到固定目录、以时间戳命名，覆盖写入而不是每次删——
+    容器里删文件既没必要也容易被安全策略拦。
+    """
+    import hashlib
+
+    import numpy as np
+    import soundfile as sf
+
+    ia = int(max(0.0, start) * sr)
+    ib = int(min(len(audio) / sr, end) * sr)
+    if ib - ia < sr // 2:  # 不到 0.5 秒的片段声纹不可靠
+        return None
+
+    key = hashlib.md5(f"{start:.3f}-{end:.3f}".encode()).hexdigest()[:12]
+    p = f"/tmp/sv_{key}.wav"
+    try:
+        sf.write(p, audio[ia:ib], sr)
+        out = model.generate(input=p)
+        vec = np.asarray(out[0]["spk_embedding"], dtype="float32").flatten()
+        if not vec.size:
+            return None
+        n = np.linalg.norm(vec)
+        return vec / n if n else None
+    except Exception as exc:
+        logger.warning(f"embedding failed for {start:.1f}-{end:.1f}: {exc}")
+        return None
+
+
+@app.post("/classify", response_model=ClassifyResponse)
+def classify(req: ClassifyRequest):
+    """用人工标注的片段算每个说话人的声纹中心，再给目标片段分类。
+
+    相比无监督聚类，这里「有几类、每类的中心」都由人工确定，
+    避开了聚类最难的部分。代价是需要先标注几个样本。
+    """
+    import numpy as np
+
+    audio_path = Path(req.path)
+    if not audio_path.is_file():
+        raise HTTPException(404, f"文件不存在：{req.path}")
+
+    groups: dict = {}
+    for s in req.seeds:
+        groups.setdefault(s.speaker, []).append((s.start, s.end))
+    if len(groups) < 2:
+        raise HTTPException(400, "至少需要两个说话人的标注样本")
+
+    started = time.time()
+    audio, sr = _read_audio(str(audio_path))
+    model = get_sv_model()
+
+    centers = {}
+    for spk, spans in groups.items():
+        vecs = [v for a, b in spans if (v := _embed_range(model, audio, sr, a, b)) is not None]
+        if not vecs:
+            logger.warning(f"说话人 {spk} 的标注样本太短，跳过")
+            continue
+        m = np.mean(np.vstack(vecs), axis=0)
+        n = np.linalg.norm(m)
+        centers[spk] = m / n if n else m
+
+    if len(centers) < 2:
+        raise HTTPException(400, "有效样本不足两个（标注片段太短？）")
+
+    names = list(centers.keys())
+    matrix = np.vstack([centers[k] for k in names])
+
+    results = []
+    for t in req.targets:
+        vec = _embed_range(model, audio, sr, t.start, t.end)
+        if vec is None:
+            results.append(ClassifyResult(speaker=None, score=0.0, margin=0.0))
+            continue
+        sims = matrix @ vec
+        order = np.argsort(-sims)
+        best = int(order[0])
+        second = float(sims[order[1]]) if len(order) > 1 else -1.0
+        results.append(
+            ClassifyResult(
+                speaker=names[best],
+                score=round(float(sims[best]), 4),
+                margin=round(float(sims[best] - second), 4),
+            )
+        )
+
+    elapsed = int((time.time() - started) * 1000)
+    logger.info(
+        f"Classified {len(req.targets)} span(s) against {len(centers)} speaker(s) in {elapsed}ms"
+    )
+    return ClassifyResponse(
+        results=results,
+        centers={k: {"count": len(groups.get(k, []))} for k in names},
+        elapsedMs=elapsed,
+    )

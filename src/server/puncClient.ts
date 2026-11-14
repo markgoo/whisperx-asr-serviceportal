@@ -196,3 +196,43 @@ export function checkPuncHealth(baseUrl: string, timeoutMs = 4000): Promise<{
     req.end();
   });
 }
+
+export interface ClassifyItem {
+  speaker: string | null;
+  score: number;
+  margin: number;
+}
+
+export interface ClassifySpansResult {
+  results: ClassifyItem[];
+  centers: Record<string, { count: number }>;
+  elapsedMs: number;
+}
+
+/**
+ * 按人工标注做声纹分类。
+ *
+ * @param seeds   人工标注的片段（时间 + 说话人），用来算每个说话人的声纹中心
+ * @param targets 需要判断归属的片段
+ *
+ * margin 是「最像的」和「次像的」相似度之差。margin 小说明两个人都像，
+ * 结果不可靠，界面上可以据此提示用户复核。
+ */
+export async function classifySpans(
+  baseUrl: string,
+  audioPath: string,
+  seeds: Array<{ start: number; end: number; speaker: string }>,
+  targets: Array<{ start: number; end: number }>,
+  timeoutMs = 180_000,
+): Promise<ClassifySpansResult> {
+  const res = (await postJsonTo(
+    baseUrl,
+    '/classify',
+    { path: audioPath, seeds, targets },
+    timeoutMs,
+  )) as ClassifySpansResult;
+  if (!Array.isArray(res.results) || res.results.length !== targets.length) {
+    throw new Error('声纹分析返回的段数与请求不一致');
+  }
+  return res;
+}
