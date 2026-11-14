@@ -40,6 +40,19 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 -- 词级时间戳，单独一张表。
 -- 放这里而不是塞进 tasks：tasks 的列表查询用 SELECT *，
 -- 带上几 MB 的 JSON 会把列表拖慢。
+-- 文本编辑记录：每改一段文字就留一条，记下改前改后。
+-- 用途：追查「哪个词反复被识别错」，也是术语词典的候选来源。
+CREATE TABLE IF NOT EXISTS segment_edits (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id        INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  segment_index  INTEGER NOT NULL,
+  before_text    TEXT NOT NULL,
+  after_text     TEXT NOT NULL,
+  user_id        INTEGER,
+  created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_segment_edits_task ON segment_edits(task_id, created_at);
+
 CREATE TABLE IF NOT EXISTS task_words (
   task_id    INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
   payload    TEXT NOT NULL,

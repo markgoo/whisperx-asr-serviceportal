@@ -849,6 +849,77 @@ api.get(
     res.json({ timings, hasWordData: !!stored });
   }),
 );
+/**
+ * 改某一段的文本，并留下编辑记录。
+ *
+ * 用于修 ASR 识别错的字。只改文本，时间范围不动——用户改的是字，
+ * 不是重新对齐；真要重新对齐得重新转写。
+ *
+ * 每次修改都往 segment_edits 里写一条（改前、改后、谁改的、什么时候），
+ * 这样能追查哪些词反复被识别错，也是术语词典的候选来源。
+ */
+api.post(
+  '/tasks/:id/segments/text',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = requireUser(req);
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    if (task.status !== 'completed') throw badRequest('只能修改已完成的任务');
+
+    const index = Number(req.body?.index);
+    if (!Number.isInteger(index)) throw badRequest('需要 index 参数');
+
+    const segments = safeParseSegments(task.result_json) as LabeledSegment[];
+    if (index < 0 || index >= segments.length) throw badRequest('段落索引超出范围');
+
+    const raw = req.body?.text;
+    if (typeof raw !== 'string') throw badRequest('需要 text 参数');
+    const next = raw.replace(/\s+/g, ' ').trim();
+    if (!next) throw badRequest('文本不能为空');
+    if (next.length > 2000) throw badRequest('单段文本过长');
+
+    const before = segments[index].text;
+    if (before === next) {
+      return res.json({ task: toTaskDetailDto(task, ownerName(task.user_id)), changed: false });
+    }
+
+    segments[index] = { ...segments[index], text: next, manual: true };
+    const joined = segments.map((s) => s.text).join('');
+
+    const db = getDb();
+    db.prepare('UPDATE tasks SET result_text = ?, result_json = ? WHERE id = ?').run(
+      joined,
+      JSON.stringify(segments),
+      task.id,
+    );
+    db.prepare(
+      `INSERT INTO segment_edits (task_id, segment_index, before_text, after_text, user_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(task.id, index, before, next, user.id, nowIso());
+    audit(user.id, user.username, 'task_segment_text', `#${task.id} 第 ${index + 1} 段`);
+
+    const fresh = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task.id) as TaskRow;
+    res.json({ task: toTaskDetailDto(fresh, ownerName(fresh.user_id)), changed: true });
+  }),
+);
+
+/** 某一任务的所有文本编辑记录，最新在前。 */
+api.get(
+  '/tasks/:id/edits',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    const rows = getDb()
+      .prepare(
+        `SELECT e.id, e.segment_index, e.before_text, e.after_text, e.created_at, u.username
+         FROM segment_edits e LEFT JOIN users u ON u.id = e.user_id
+         WHERE e.task_id = ? ORDER BY e.id DESC LIMIT 200`,
+      )
+      .all(task.id);
+    res.json({ edits: rows });
+  }),
+);
+
 api.post(
   '/tasks/:id/segments/split',
   requireAuth,

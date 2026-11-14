@@ -112,6 +112,26 @@ export const api = {
     }),
 
   /** 把一段在指定字符位置拆成两段 */
+  /** 改某一段的文字（会留编辑记录） */
+  editSegmentText: (id: number, index: number, text: string) =>
+    request<{ task: TaskDetail; changed: boolean }>(`/tasks/${id}/segments/text`, {
+      method: 'POST',
+      body: JSON.stringify({ index, text }),
+    }),
+
+  /** 某一任务的文本编辑记录 */
+  loadEdits: (id: number) =>
+    request<{
+      edits: Array<{
+        id: number;
+        segment_index: number;
+        before_text: string;
+        after_text: string;
+        created_at: string;
+        username: string | null;
+      }>;
+    }>(`/tasks/${id}/edits`),
+
   /** 某一段的字符级时间映射，用于播放与文字联动 */
   charTimings: (id: number, index: number) =>
     request<{ timings: Array<{ index: number; start: number; end: number }>; hasWordData: boolean }>(

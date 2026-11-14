@@ -1013,3 +1013,54 @@ details.adv[open] { margin-bottom: 6px; }
   border-radius: 3px;
   box-shadow: 0 0 0 1px #c7cdfa inset;
 }
+
+/* 改字弹窗 */
+.text-editor-original {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.text-editor-source {
+  font-size: 14px;
+  line-height: 1.8;
+  user-select: text;
+  cursor: text;
+}
+.text-editor-source::selection { background: #c7cdfa; }
+.text-editor-input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  resize: vertical;
+  min-height: 90px;
+}
+.text-editor-input:focus { outline: 2px solid var(--brand-ring); border-color: var(--brand); }
+.text-editor-history {
+  margin-top: 14px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+.text-editor-diff {
+  margin-bottom: 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.diff-line { display: flex; gap: 6px; }
+.diff-del {
+  color: #b42318;
+  background: #fef3f2;
+  border-radius: 3px;
+  padding: 0 3px;
+  text-decoration: line-through;
+}
+.diff-add {
+  color: #067647;
+  background: #ecfdf3;
+  border-radius: 3px;
+  padding: 0 3px;
+}

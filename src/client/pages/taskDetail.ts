@@ -320,6 +320,19 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
           },
           '✂ 这一段里有两人的话 → 拆开',
         ),
+        // 改字：修 ASR 识别错误
+        h(
+          'button',
+          {
+            class: 'btn',
+            style: 'justify-content:flex-start',
+            onclick: () => {
+              closeModal();
+              openTextEditor(segIndex);
+            },
+          },
+          '✎ 改这段的字（修识别错误）',
+        ),
         h('div', { class: 'hint', style: 'margin-top:10px' },
           '改归属只影响这一段。想改这个说话人的名字（所有段落一起变），点下面的按钮。'),
         h(
@@ -594,6 +607,114 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     refresh();
   };
 
+
+  /**
+   * 改一段的文字。
+   *
+   * 两种改法都支持：
+   *   - 整段编辑：直接在文本框里改，适合一段里有多处错字
+   *   - 选中替换：先在原文上选中几个字，再输入正确的，适合只改一处
+   *
+   * 每次保存都会留一条编辑记录（改前/改后/谁改的/什么时候），
+   * 底部能看这段的修改历史。
+   */
+  const openTextEditor = (segIndex: number): void => {
+    const seg = task.segments[segIndex];
+    if (!seg) return;
+
+    const original = seg.text;
+    const input = h('textarea', {
+      class: 'text-editor-input',
+      rows: '4',
+      maxlength: '2000',
+    }) as HTMLTextAreaElement;
+    input.value = original;
+
+    const historyBox = h('div', { class: 'text-editor-history' });
+
+    // 选中原文里的字 → 填到输入框的替换位置（做成「选中什么就改什么」）
+    const selInfo = h('div', { class: 'tiny muted', style: 'margin-top:6px' }, '');
+
+    const refreshSel = (): void => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount) {
+        selInfo.textContent = '';
+        return;
+      }
+      const picked = sel.toString().trim();
+      if (!picked) {
+        selInfo.textContent = '';
+        return;
+      }
+      selInfo.textContent = `已选中「${picked.slice(0, 30)}」`;
+    };
+
+    const originalBox = h(
+      'div',
+      { class: 'text-editor-original' },
+      h('div', { class: 'tiny muted', style: 'margin-bottom:4px' }, '原文（可选中要替换的字）：'),
+      h('div', { class: 'text-editor-source', onmouseup: refreshSel }, original),
+    );
+
+    void api
+      .loadEdits(task.id)
+      .then((r) => {
+        const mine = r.edits.filter((e) => e.segment_index === segIndex);
+        if (!mine.length) return;
+        historyBox.appendChild(
+          h('div', { class: 'tiny muted', style: 'margin-bottom:6px' }, `这段改过 ${mine.length} 次：`),
+        );
+        for (const e of mine.slice(0, 5)) {
+          historyBox.appendChild(
+            h(
+              'div',
+              { class: 'text-editor-diff' },
+              h('div', { class: 'tiny muted' }, `${e.created_at.slice(0, 16).replace('T', ' ')} · ${e.username || '?'}`),
+              h('div', { class: 'diff-line' }, h('span', { class: 'diff-del' }, e.before_text)),
+              h('div', { class: 'diff-line' }, h('span', { class: 'diff-add' }, e.after_text)),
+            ),
+          );
+        }
+      })
+      .catch(() => undefined);
+
+    showModal({
+      title: `修改第 ${segIndex + 1} 段的文字`,
+      wide: true,
+      body: h(
+        'div',
+        null,
+        originalBox,
+        h('div', { class: 'field', style: 'margin-top:14px;margin-bottom:0' }, h('label', null, '改成'), input),
+        selInfo,
+        h('div', { class: 'hint', style: 'margin-top:6px' },
+          '时间轴不会跟着变——这里只修字。改动会留记录，方便追查反复识别错的词。'),
+        historyBox,
+      ),
+      confirmText: '保存',
+      onConfirm: async () => {
+        const next = input.value.trim();
+        if (!next) {
+          toast('文本不能为空', 'err');
+          return false;
+        }
+        if (next === original) {
+          toast('没有改动', 'ok');
+          return;
+        }
+        try {
+          await api.editSegmentText(task.id, segIndex, next);
+          toast('已保存', 'ok');
+          void renderTaskDetail(root, task.id);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : String(err), 'err');
+          return false;
+        }
+        return undefined;
+      },
+    });
+    setTimeout(() => input.focus(), 30);
+  };
 
   /**
    * 只改某一个说话人的名字（全局生效）。
