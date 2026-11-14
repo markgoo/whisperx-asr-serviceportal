@@ -455,8 +455,20 @@ export function smoothSpeakers<T extends { speaker?: string | null; start: numbe
     const dur = cur.end - cur.start;
     const chars = cur.text.replace(/[，。！？、\s]/g, '').length;
 
-    // 夹在两段同一说话人之间的短句：说话人改回去
-    if (prev.speaker === next.speaker && cur.speaker !== prev.speaker && dur < minDurSec && chars < minChars) {
+    // 夹在两段同一说话人之间的短句：说话人改回去。
+    //
+    // 但要排除「带句末标点的完整句子」。diarization 抖动切出来的是
+    // 「年都有的」这种词中间的碎片，不会有句号问号；真实的短句换人
+    // 是完整语句，比如记者的追问「树下。那为什么选在这」。
+    // 不加这个判断，记者的提问会被当成抖动抹回上一个人。
+    const isCompleteSentence = /[。！？?!]/.test(cur.text);
+    if (
+      prev.speaker === next.speaker &&
+      cur.speaker !== prev.speaker &&
+      dur < minDurSec &&
+      chars < minChars &&
+      !isCompleteSentence
+    ) {
       merged[i] = { ...cur, speaker: prev.speaker };
     }
   }
