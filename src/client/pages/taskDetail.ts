@@ -315,8 +315,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
           '✎ 修改「' + labelOf(spk) + '」的名字',
         ),
       ),
-      confirmText: '取消',
-      cancelText: '',
+      // 没有 onConfirm，showModal 只会渲染一个按钮，文字取 cancelText。
+      // 之前传了空串，渲染出一个空白按钮。
+      cancelText: '关闭',
     });
   };
 

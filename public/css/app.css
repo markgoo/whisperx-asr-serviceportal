@@ -708,7 +708,11 @@ audio { width: 100%; margin-top: 10px; }
   width: 100%;
   max-width: 460px;
   max-height: 90vh;
-  overflow: auto;
+  /* flex 布局让「内容区」单独滚动：头和底部按钮始终可见。
+     整体 overflow:auto 的话，内容一多会连标题和按钮一起滚走。 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   animation: pop .14s ease;
 }
 .modal.wide { max-width: 700px; }
@@ -716,15 +720,22 @@ audio { width: 100%; margin-top: 10px; }
   display: flex; align-items: center;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 .modal-head h3 { margin: 0; font-size: 15.5px; font-weight: 650; }
-.modal-body { padding: 18px 20px; }
+.modal-body {
+  padding: 18px 20px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
 .modal-foot {
   display: flex; justify-content: flex-end; gap: 10px;
   padding: 14px 20px;
   border-top: 1px solid var(--border);
   background: var(--panel-2);
   border-radius: 0 0 14px 14px;
+  flex: 0 0 auto;
 }
 @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
 @keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.99) } to { opacity: 1; transform: none } }
