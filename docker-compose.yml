@@ -12,8 +12,14 @@
 services:
   # ---------------------------------------------------------------- ASR 服务
   asr:
+    # 不是直接拉官方镜像，而是在它上面叠一层本地补丁（让 DIARIZATION_MODEL
+    # 生效）。补丁以前是 docker cp 塞进容器的，重建就丢，见 docker/asr-service/。
     # RTX 50xx（Blackwell）用 :blackwell 标签；其他 NVIDIA 卡用 :latest
-    image: learnedmachine/whisperx-asr-service:${ASR_IMAGE_TAG:-latest}
+    build:
+      context: ./docker/asr-service
+      args:
+        ASR_IMAGE_TAG: ${ASR_IMAGE_TAG:-latest}
+    image: whisperx-asr:${ASR_IMAGE_TAG:-latest}
     container_name: whisperx-asr
     restart: unless-stopped
     ports:
@@ -34,11 +40,14 @@ services:
       # 说话人分离后的段落重切分：多人对话不重切会被合并成一个人
       # pyannote 分离模型。community-1 是默认；3.1 是更早但更保守的版本，
       # 某些音频上表现不同，可用来对比。
-      # 短于这个秒数的停顿会被填充，从而合并两侧的说话人 turn。
-      # 调大可抑制「过度切分」，但对我们这种「归属错」的问题未必有效。
-      - DIARIZE_MIN_DURATION_OFF=${DIARIZE_MIN_DURATION_OFF:-0}
-      - DIARIZE_CLUSTERING_THRESHOLD=${DIARIZE_CLUSTERING_THRESHOLD:-}
+      # 这个变量靠 docker/asr-service 的构建期补丁才生效，官方镜像里是写死的。
       - DIARIZATION_MODEL=${DIARIZATION_MODEL:-pyannote/speaker-diarization-community-1}
+      # 短于这个秒数的停顿会被填充，从而合并两侧的说话人 turn。
+      # 调大可抑制「过度切分」（实测 2.0 能把 turn 从 100 压到 30），
+      # 但对「归属错」无效。
+      - DIARIZE_MIN_DURATION_OFF=${DIARIZE_MIN_DURATION_OFF:-0}
+      # 聚类阈值。留空用模型默认。对低码率单声道音频不敏感，基本调不动。
+      - DIARIZE_CLUSTERING_THRESHOLD=${DIARIZE_CLUSTERING_THRESHOLD:-}
       - RESEGMENT_BY_SPEAKER=${RESEGMENT_BY_SPEAKER:-false}
       - CACHE_DIR=/.cache
       - HF_HOME=/.cache

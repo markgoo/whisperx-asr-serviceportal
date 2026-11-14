@@ -113,7 +113,8 @@
 - `splitByPause()` 加第 4 个参数 `silence?: Array<[number,number]>`，有就优先用它
 - VAD 不可用时自动退回按词时长估算（不影响转写）
 
-**Dockerfile** 加了 `ffmpeg`（VAD 要解码 mp4）。
+**Dockerfile**：ffmpeg 加在 **punc 服务**里（`docker/punc-service/Dockerfile`），
+不是门户——VAD 在 punc 容器里跑，它通过只读卷 `/data` 读门户的音频。
 
 ### 3.2 短句换人不再被抹平（`f77a1bd`）
 
@@ -225,3 +226,20 @@ punc 挂在 `/data/...`，所以 `/app/data/uploads/x.mp4` → `/data/uploads/x.
 - 概览/存储的统计卡片手机端改 2x2
 
 回归工具：`tools/mobile-all.js`（390×844 视口跑七个页面，报告横向溢出）。
+
+---
+
+## 9. 2026-11-14 补记：ASR 补丁已固化进镜像
+
+这份文档 §3.2 留下的 `docker cp` 隐患（补丁随 `--force-recreate` 静默丢失）已解决：
+
+- 新增 `docker/asr-service/`：官方镜像 + `diarization-model.patch`（9 行，
+  让 `DIARIZATION_MODEL` 生效）。构建期 `git apply`，打不上就构建失败。
+- `docker-compose.yml` 里 `asr` 从 `image:` 改成 `build:`，产物 `whisperx-asr:latest`。
+- 验证：`--force-recreate` 后容器里补丁仍在；把 `DIARIZATION_MODEL` 设成不存在的
+  模型会抛 `RepositoryNotFoundError`，证明确实读了这个环境变量。
+- 顺带补全了 `.env.docker.example` 里漏掉的分离相关变量
+  （`RESEGMENT_BY_SPEAKER`、`DIARIZATION_MODEL`、`DIARIZE_*`、`ASR_CACHE_DIR`）。
+
+下一步（本文件 §6 的建议仍然有效）：`DIARIZATION_MODEL=pyannote/speaker-diarization-3.1`
+现在可以一次切换就对比，不需要再 `docker cp`。

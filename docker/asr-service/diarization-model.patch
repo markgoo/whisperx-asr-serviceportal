@@ -1,0 +1,38 @@
+Let DIARIZATION_MODEL pick the pyannote checkpoint at runtime.
+
+Upstream (learnedmachine/whisperx-asr-service) hardcodes
+pyannote/speaker-diarization-community-1. We want to A/B it against
+speaker-diarization-3.1 without editing Python source inside a running
+container. See HANDOFF-speaker-diarization.md section 3.2.
+
+Previously this was applied with `docker cp`, which silently reverted on
+`--force-recreate` / image rebuild. It is now baked into the image by
+docker/asr-service/Dockerfile.
+
+If this patch stops applying, the base image changed its diarization
+loader. Regenerate against the new base (see docker/asr-service/README.md)
+instead of deleting the check.
+
+--- a/app/pipeline.py
++++ b/app/pipeline.py
+@@ -754,9 +754,18 @@
+     if _diarize_pipeline is None:
+         with _model_load_lock:
+             if _diarize_pipeline is None:
+-                logger.info("Loading diarization pipeline: pyannote/speaker-diarization-community-1")
++                # DIARIZATION_MODEL lets operators swap in a different pyannote
++                # checkpoint without editing code. Both of these work with the
++                # same HF token:
++                #   pyannote/speaker-diarization-community-1  (default, newer)
++                #   pyannote/speaker-diarization-3.1          (older, well-tested)
++                diarize_model = (
++                    os.getenv("DIARIZATION_MODEL", "").strip()
++                    or "pyannote/speaker-diarization-community-1"
++                )
++                logger.info(f"Loading diarization pipeline: {diarize_model}")
+                 pipeline = DiarizationPipeline(
+-                    model_name="pyannote/speaker-diarization-community-1",
++                    model_name=diarize_model,
+                     use_auth_token=HF_TOKEN,
+                     device=torch.device(DEVICE),
+                 )

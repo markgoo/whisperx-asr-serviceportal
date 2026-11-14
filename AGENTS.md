@@ -45,6 +45,14 @@ docker compose --env-file .env.docker build portal
 docker compose --env-file .env.docker up -d --force-recreate portal
 ```
 
+ASR 也是本地构建的（`docker/asr-service/`，官方镜像 + 一个 9 行补丁，
+让 `DIARIZATION_MODEL` 能选模型）。升级 `ASR_IMAGE_TAG` 后重跑一次：
+
+```bash
+docker compose --env-file .env.docker build asr
+docker compose --env-file .env.docker up -d --force-recreate asr
+```
+
 **注意**：只 `npm run build` 不会更新容器里的代码，必须 rebuild 镜像。
 这个坑我踩过——改完逻辑测试没效果，查了半天才发现容器跑的是旧镜像。
 
@@ -87,7 +95,8 @@ src/server/
   db.ts            SQLite 建表 + 迁移 + 设置读写
   auth.ts          Cookie 会话、角色中间件
   storage.ts       文件落盘、路径校验、磁盘统计
-docker/punc-service/  标点服务（FastAPI + FunASR CT-Transformer）
+docker/punc-service/  标点 + VAD 静音检测服务（FastAPI + FunASR）
+docker/asr-service/   ASR overlay 镜像：官方镜像 + DIARIZATION_MODEL 补丁
 src/client/pages/taskDetail.ts   ★ 最复杂的前端页面（播放器联动、筛选、改名）
 ```
 
@@ -152,6 +161,7 @@ whisperx 那套已 pin 好的依赖——**pyannote 曾经把 CUDA torch 换成 
 | pyannote 降级 torch | CUDA 静默变 False | 装完 pyannote 必须重新 pin CUDA 版 torch |
 | `condition_on_previous_text` | 以为能修重复，实际无效 | **whisperx 默认就是 False**，找不到这个开关别浪费时间 |
 | 只 build 不 rebuild 镜像 | 改的代码不生效 | 容器跑的是镜像，必须 `docker compose build` + `force-recreate` |
+| `docker cp` 进容器的补丁 | `--force-recreate` 后静默消失，切回默认模型还不报错 | ASR 的 `DIARIZATION_MODEL` 补丁就这么丢过。现在改走 `docker/asr-service/` overlay 镜像，补丁打在构建期 |
 
 ---
 

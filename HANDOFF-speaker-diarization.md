@@ -188,7 +188,11 @@ docker compose --env-file .env.docker up -d --force-recreate portal
 `docker cp app\pipeline.py whisperx-asr:/workspace/app/pipeline.py` 塞进容器的，
 **容器被 `--force-recreate` 或镜像重建后会丢失**。
 
-要长期生效，得构建自己的 ASR 镜像（把改后的 `app/` 打进去）。
+> **2026-11-14 已解决**：不再用 `docker cp`。补丁固化进了 overlay 镜像
+> `docker/asr-service/`（compose 里 `asr` 改成 build，产物 `whisperx-asr:latest`），
+> 构建期 `git apply` 打补丁，打不上就构建失败。已实测：`--force-recreate`
+> 后补丁仍在，且 `DIARIZATION_MODEL` 真的会被读取（填个不存在的模型会抛
+> `RepositoryNotFoundError`）。详见 `docker/asr-service/README.md`。
 
 **验证命令**：
 
@@ -196,10 +200,8 @@ docker compose --env-file .env.docker up -d --force-recreate portal
 # 切到 3.1
 # .env.docker 里设 DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
 docker compose --env-file .env.docker up -d --force-recreate asr
-docker cp C:\AI\whisperx-asr-service\app\pipeline.py whisperx-asr:/workspace/app/pipeline.py
-docker restart whisperx-asr
 # 确认日志里加载的是哪个模型
-docker logs whisperx-asr --tail 30 | findstr "Loading diarization pipeline"
+docker logs whisperx-asr --tail 30 | grep "Loading diarization pipeline"
 ```
 
 ---

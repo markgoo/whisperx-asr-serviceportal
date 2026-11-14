@@ -48,6 +48,11 @@ docker compose --env-file .env.docker up -d
 
 首次启动会拉镜像、下模型，约 10-20 分钟。之后 `docker compose up -d` 秒起。
 
+> **ASR 镜像是本地构建的**（`docker/asr-service/`），不是直接拉官方镜像：
+> 官方镜像把 pyannote 模型名写死了，我们在上面叠了 9 行补丁，让
+> `DIARIZATION_MODEL` 环境变量生效。所以 `asr` 需要 `docker compose build` 一次，
+> 升级 `ASR_IMAGE_TAG` 后也要重建。补丁打不上时构建会直接失败，不会静默降级。
+
 ```bash
 docker compose logs -f portal     # 看门户日志
 docker compose ps                 # 看服务状态
@@ -325,6 +330,8 @@ src/server/          后端 TypeScript
   mappers.ts         数据库行 → 前端 DTO
 src/client/          前端 TypeScript（编译到 public/js）
 public/              index.html + app.css + 编译产物
+docker/asr-service/  ASR overlay 镜像（官方镜像 + DIARIZATION_MODEL 补丁）
+docker/punc-service/ 标点 + VAD 服务
 tools/               mock ASR、冒烟测试、界面检查
 data/                运行时生成（数据库、上传文件）
 ```
@@ -387,6 +394,8 @@ src/client/          前端 TypeScript（编译到 public/js）
   dom.ts / ui.ts     DOM 助手、模态框、提示
   pages/             各页面
 public/              index.html + 手写 CSS（+ 编译产物 js/）
+docker/asr-service/  ASR overlay 镜像：官方镜像 + 9 行补丁，让 DIARIZATION_MODEL 生效
+docker/punc-service/ 标点恢复 + /vad 静音检测服务
 tools/               模拟 ASR、冒烟测试、界面检查、下载加速
 data/                运行时生成（数据库、上传文件），不进版本库
 ```
