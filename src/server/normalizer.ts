@@ -90,8 +90,31 @@ export interface NormalizeOptions {
  * - 全大写、2 个以上单字母：`A I` -> `AI`，`G P U` -> `GPU`，`C U D A` -> `CUDA`
  * - 大小写混排、3 个以上单字母：`S y s t e m` -> `System`（2 个的不动，容易误判）
  */
+/**
+ * 常见英文词被空格拆开的修正。
+ *
+ * whisper 偶尔把多字母单词切成两段（实测「iPhone」变成「Ip hone」）。
+ * 不能盲目合并相邻字母——中英混排里「用它的 GPU 跟 CUDA」的空格是正常的，
+ * 合并会变成「用它的GPU跟CUDA」。所以只修已知的高频词。
+ */
+const SPLIT_WORD_FIXES: Array<[RegExp, string]> = [
+  [/\bIp\s*hone\b/gi, 'iPhone'],
+  [/\bi\s*Phone\b/gi, 'iPhone'],
+  [/\bi\s*Pad\b/gi, 'iPad'],
+  [/\bWi[\s-]*Fi\b/gi, 'WiFi'],
+  [/\bYou\s*Tube\b/gi, 'YouTube'],
+  [/\bFace\s*book\b/gi, 'Facebook'],
+  [/\bGoo\s*gle\b/gi, 'Google'],
+  [/\bChat\s*GPT\b/gi, 'ChatGPT'],
+  [/\bWi\s*ndows\b/gi, 'Windows'],
+  [/\bMac\s*Book\b/gi, 'MacBook'],
+];
+
 export function mergeSplitAcronyms(text: string): string {
-  return text
+  let out = text;
+  // 先修已知的拆词，再处理单字母缩写
+  for (const [re, fixed] of SPLIT_WORD_FIXES) out = out.replace(re, fixed);
+  return out
     // 全大写连续单字母
     .replace(/(?<![A-Za-z])(?:[A-Z](?:[ \u00A0]+[A-Z]){1,5})(?![A-Za-z])/g, (m) =>
       m.replace(/[ \u00A0]+/g, ''),

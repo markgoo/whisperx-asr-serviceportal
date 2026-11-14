@@ -139,6 +139,40 @@ const CLING_START = new Set(
   [...'者性化们的了着过地得吗呢吧啊呀嘛哦欸在'],
 );
 
+/**
+ * 高频双字词：切分点落在这些词的中间时，把切分点往前挪。
+ *
+ * 中文分词器（Intl.Segmenter）把中文切成单字，帮不上忙；VAD 又只看静音，
+ * 不知道词边界。于是会出现「…方式，一。｜个呢是…」这种把「一个」切开、
+ * 前后各成一段的情况——实测一份 81 分钟的讲座录里有 10 多处，
+ * 而且后一段开头还跟着一个句号，读起来很别扭。
+ *
+ * 只收真正高频、拆开明显不自然的两字词。
+ */
+const TWO_CHAR_WORDS = new Set([
+  '一个', '一种', '一些', '一样', '一定', '一直', '一起', '一般',
+  '还是', '还有', '但是', '不但', '而且', '因为', '所以', '如果',
+  '我们', '他们', '你们', '它们', '咱们',
+  '这个', '那个', '这些', '那些', '这里', '那里', '这样', '那样',
+  '就是', '不是', '也是', '都是', '可是', '要是', '于是',
+  '可以', '没有', '知道', '觉得', '应该', '需要', '可能', '已经',
+  '现在', '时候', '什么', '怎么', '怎样', '如何',
+  '东西', '事情', '问题', '地方', '方面', '情况', '样子',
+  '第一', '第二', '第三', '两个', '三个', '几个', '很多', '非常',
+  '大家', '各位', '老师', '同学', '朋友',
+]);
+
+/** 切分点是否把常用词劈开了；是的话返回往前挪几位（0 表示不动）。 */
+function snapCutOffWord(text: string, pos: number): number {
+  for (let back = 1; back <= 2; back += 1) {
+    const from = pos - back;
+    if (from < 0) break;
+    const pair = text.slice(from, pos + 1);
+    if (pair.length === 2 && TWO_CHAR_WORDS.has(pair)) return back;
+  }
+  return 0;
+}
+
 /** 判断在 pos 处断句是否会切在黏着字前面。 */
 function clingsForward(text: string, pos: number): boolean {
   const next = text[pos];
@@ -329,7 +363,27 @@ export function smoothTurns(turns: SpeakerTurn[], maxSqueezeWords = 6, maxSqueez
     if (last && last.speaker === t.speaker) last.words.push(...t.words);
     else final.push(t);
   }
-  return final;
+
+  // 边界修正：turn 边界落在「一个」「还是」这类常用词中间时，
+  // 把后一段开头的词挪到前一段。
+  //
+  // 为什么要在这一层修：开了说话人分离时，分段由 speaker 变化决定，
+  // splitByPause 只在每个 turn 内部工作——它的切分点吸附管不到 turn 边界。
+  // 实测一份讲座录里「…方式，一。｜个呢是…」这种断词有 10 多处。
+  for (let i = 1; i < final.length; i += 1) {
+    const prev = final[i - 1];
+    const cur = final[i];
+    // 最多挪 2 个词，避免吞掉后一段的开头
+    for (let moved = 0; moved < 2 && cur.words.length > 1; moved += 1) {
+      const a = prev.words[prev.words.length - 1]?.word.slice(-1) ?? '';
+      const b = cur.words[0]?.word[0] ?? '';
+      if (!a || !b || !TWO_CHAR_WORDS.has(a + b)) break;
+      prev.words.push(cur.words.shift()!);
+    }
+  }
+
+  // 边界挪完之后可能出现空的 turn
+  return final.filter((t) => t.words.length > 0);
 }
 
 interface Block {
@@ -700,7 +754,11 @@ export function splitByPause(
     const strongSorted = [...new Set(strongMarks)].sort((a, b) => a - b);
     const cuts: number[] = [];
     let lastCut = 0;
-    for (const at of strongSorted) {
+    for (const raw of strongSorted) {
+      // 切分点如果正好劈开「一个」「还是」这类常用词，往前挪一位。
+      // 往前挪而不是往后：后一段开头带着黏着字读起来更别扭。
+      const at = raw - snapCutOffWord(text, raw);
+      if (at <= lastCut) continue;
       if (at - lastCut < MIN_SEG_CHARS) continue;
       if (text.length - at < MIN_SEG_CHARS) continue;
       cuts.push(at);
@@ -726,9 +784,17 @@ export function splitByPause(
         .map((pos) => ({ pos, dur: durAt(pos) }))
         .filter((x) => !cuts.includes(x.pos))
         .sort((a, b) => b.dur - a.dur)
-        .slice(0, wantCuts)
         .map((x) => x.pos);
-      cuts.push(...extra);
+      // 这条路径也要避免劈开常用词，并且和已有切分点保持距离——
+      // 之前只在 strongMarks 那条路径上做了，长段强制细分切出来的
+      // 「一。｜个呢是」就是这么漏掉的。
+      for (const raw of extra) {
+        if (cuts.length >= wantCuts) break;
+        const at = raw - snapCutOffWord(text, raw);
+        if (at <= 0 || text.length - at < MIN_SEG_CHARS) continue;
+        if (cuts.some((c) => Math.abs(c - at) < MIN_SEG_CHARS)) continue;
+        cuts.push(at);
+      }
       cuts.sort((a, b) => a - b);
     }
 
