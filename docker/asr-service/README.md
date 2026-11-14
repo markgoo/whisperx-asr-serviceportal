@@ -50,3 +50,10 @@ cd /tmp/ptest && diff -u a/app/pipeline.py b/app/pipeline.py \
 
 注意：**不要在 Windows 上用编辑器直接改容器里的 py 文件再 diff**，
 Git Bash / 编辑器会写成 CRLF，`git apply` 会整文件不匹配。
+
+两层保护：
+
+- `.gitattributes` 给本目录的 patch / Dockerfile 强制了 `eol=lf`
+  （Windows 上 `core.autocrlf=true` 时签出会变成 CRLF）
+- Dockerfile 里 `sed -i 's/\r$//'` 在 `git apply` 前清一遍，已实测：
+  故意放 CRLF 补丁也能打上

@@ -22,7 +22,11 @@ LABEL org.opencontainers.image.base.name="learnedmachine/whisperx-asr-service:${
 # （在非 git 目录里也能用，只按文件路径打补丁）。
 COPY diarization-model.patch /tmp/diarization-model.patch
 
+# 先清掉 CRLF：补丁打的是容器里的 LF 文件，如果构建上下文里的补丁被
+# Windows 编辑器/签出弄成 CRLF，每一行上下文都对不上。.gitattributes 里
+# 已经强制 eol=lf，这里是第二层保险。
 RUN cd /workspace \
+ && sed -i 's/\r$//' /tmp/diarization-model.patch \
  && git apply --verbose --whitespace=nowarn /tmp/diarization-model.patch \
  && rm /tmp/diarization-model.patch
 

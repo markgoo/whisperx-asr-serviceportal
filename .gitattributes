@@ -1,0 +1,15 @@
+# 这两个文件必须是 LF，否则构建会坏：
+#
+# diarization-model.patch 用 `git apply` 打在容器里的 app/pipeline.py 上，
+# 而那个文件是 LF。Windows 上 core.autocrlf=true（本机就是）会把补丁签出成
+# CRLF，每一行上下文都对不上，`git apply` 直接失败。
+# Dockerfile 里还有一层 CRLF 清理兜底，但根源在这里修。
+docker/asr-service/diarization-model.patch text eol=lf
+docker/asr-service/Dockerfile text eol=lf
+docker/punc-service/Dockerfile text eol=lf
+docker/punc-service/requirements.txt text eol=lf
+
+# Shell 脚本同理：CRLF 会让容器里的 /bin/sh 报 "bad interpreter"
+*.sh text eol=lf
+
+# 其余沿用 Git 默认（Windows 上签出 CRLF，仓库里存 LF）
