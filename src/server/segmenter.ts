@@ -596,16 +596,53 @@ export function splitByPause(
     // 用词重建文本，同时记录每个词边界处的停顿
     let text = '';
     const pauses: { pos: number; dur: number }[] = [];
+    /** 每个词在 text 里的起始字符位置 */
+    const wordStart = new Map<number, number>();
     for (let i = 0; i < inside.length; i += 1) {
+      wordStart.set(i, text.length);
       if (i > 0) {
         const prevWord = inside[i - 1];
         const curWord = inside[i];
-        // 有 VAD 数据就用它：看「这两个词之间的时间点」落在哪个静音区间
+        // 有 VAD 数据就用它；否则退回按词时长估算
         const vadGap = silenceAt((prevWord.end + curWord.start) / 2);
         const dur = silence && silence.length ? vadGap : pauseAfter(prevWord, curWord);
         pauses.push({ pos: text.length, dur });
       }
       text += inside[i].word;
+    }
+
+    // ---- 以 VAD 静音为准找切分点 ----
+    //
+    // 不能只靠「两个词的中点落在静音里」：whisperx 会把停顿吸收进某个字的
+    // 时长（实测「还」这一个字占 2.71 秒，吞掉了 1.6-2.3 的真实静音），
+    // 中点落在静音外面，永远命中不了。
+    //
+    // 改成反过来看：每段静音结束后**第一个开始说的词**，就是切分位置。
+    if (silence && silence.length) {
+      const seen = new Set<number>();
+      for (const [a, b] of silence) {
+        if (b - a < opts.commaPauseSec) continue;
+        // 找静音结束之后第一个开始的词
+        let hit = -1;
+        for (let i = 1; i < inside.length; i += 1) {
+          if (inside[i].start >= b - 0.08) {
+            hit = i;
+            break;
+          }
+        }
+        if (hit < 0) continue;
+        const pos = wordStart.get(hit);
+        if (pos === undefined || pos <= 0) continue;
+        // 回填到 pauses 里，让后面的强/弱边界逻辑统一处理
+        const cur = pauses.find((p) => p.pos === pos);
+        if (cur) {
+          cur.dur = Math.max(cur.dur, b - a);
+        } else if (!seen.has(pos)) {
+          pauses.push({ pos, dur: b - a });
+        }
+        seen.add(pos);
+      }
+      pauses.sort((x, y) => x.pos - y.pos);
     }
 
     // 词覆盖率太低（词没取全 / 词和文本对不上）就退回原文本，避免丢字

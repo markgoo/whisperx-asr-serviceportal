@@ -205,10 +205,16 @@ export function collapseRepeats(text: string, minRepeat = 4): string {
 
   while (i < text.length) {
     let matched = false;
-    // 从长到短找重复单元，优先匹配长短语（「真的没有」「不好意思」）
-    for (let len = Math.min(8, text.length - i); len >= 2; len -= 1) {
+    // 从长到短找重复单元，优先匹配长短语（「真的没有」「不好意思」）。
+    // 允许单字单元：实测有「挨挨挨挨挨挨挨挨挨挨挨挨挨挨挨」这种
+    // 单字循环，之前最小长度设成 2 漏掉了。minRepeat=4 保证
+    // 「看看」「说说」这种正常的重复两次不会被误伤。
+    for (let len = Math.min(8, text.length - i); len >= 1; len -= 1) {
       const unit = text.slice(i, i + len);
       if (/^[，。！？；、\s]+$/.test(unit)) continue;
+      // 全同字符（「挨挨挨」）交给 len=1 处理。
+      // 否则 "挨挨挨" 会先作为 len=3 的单元匹配上，循环完留下 "挨挨" 的尾巴。
+      if (len > 1 && new Set(unit).size === 1) continue;
       let count = 1;
       let j = i + len;
       while (text.slice(j, j + len) === unit) {
