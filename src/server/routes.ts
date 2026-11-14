@@ -837,17 +837,24 @@ api.post(
     if (task.status !== 'completed') throw badRequest('只能修改已完成的任务');
 
     const index = Number(req.body?.index);
-    const cut = Number(req.body?.cut);
-    if (!Number.isInteger(index) || !Number.isInteger(cut)) {
-      throw badRequest('需要 index 和 cut 两个整数参数');
+    // 支持一次拆成多段：传 cuts 数组；兼容旧的单点 cut
+    const rawCuts = req.body?.cuts ?? (req.body?.cut !== undefined ? [req.body.cut] : null);
+    if (!Number.isInteger(index)) throw badRequest('需要 index 参数');
+    if (!Array.isArray(rawCuts) || !rawCuts.length) throw badRequest('需要至少一个切分点');
+
+    const cuts: number[] = [];
+    for (const c of rawCuts) {
+      const n = Number(c);
+      if (Number.isInteger(n)) cuts.push(n);
     }
+    if (!cuts.length) throw badRequest('切分点必须是整数位置');
 
     const segments = safeParseSegments(task.result_json) as LabeledSegment[];
     if (index < 0 || index >= segments.length) throw badRequest('段落索引超出范围');
 
     const seg = segments[index];
     const stored = loadTaskWords(task.id);
-    const pieces = splitSegment(seg, seg.text, [cut], stored?.words);
+    const pieces = splitSegment(seg, seg.text, cuts, stored?.words);
     if (!pieces) throw badRequest('切分点位置无效（可能落在开头或末尾）');
 
     // 拆出来的段落沿用原说话人，标记 manual 让用户接着改

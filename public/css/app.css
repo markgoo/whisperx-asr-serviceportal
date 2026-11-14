@@ -911,37 +911,60 @@ details.adv[open] { margin-bottom: 6px; }
   }
 }
 
-/* 段落拆分的候选切分点 */
-.split-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 46vh;
-  overflow-y: auto;
+/* 段落拆分：字与字之间可点的缝 */
+.split-editor {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 6px;
+  padding: 14px 16px;
+  background: #fbfcfe;
+  font-size: 17px;
+  line-height: 2.1;
+  max-height: 40vh;
+  overflow-y: auto;
+  /* 允许在任意位置换行，但不要拆开「字+缝」的组合 */
+  word-break: break-word;
 }
-.split-point {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--text);
+.split-char {
+  display: inline;
+  white-space: pre-wrap;
+}
+.split-slot {
+  display: inline-block;
+  width: 7px;
+  height: 1.4em;
+  margin: 0 1px;
+  vertical-align: middle;
   cursor: pointer;
-  line-height: 1.5;
+  border-radius: 2px;
+  position: relative;
+  transition: background .1s;
 }
-.split-point:hover { background: #f4f5fa; }
-.split-point.on { background: #eef0ff; }
-.split-point-punct { font-weight: 600; }
-.split-point-punct .split-mark { color: var(--brand); }
-.split-before { color: var(--text); }
-.split-mark { color: var(--muted-2); font-weight: 700; }
-.split-after { color: var(--muted); }
+.split-slot::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 15%;
+  bottom: 15%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: #d9dcea;
+  transition: background .1s, width .1s;
+}
+.split-slot:hover::before { background: var(--brand); width: 2px; }
+.split-slot:hover { background: #eef0ff; }
+/* 已插入的分割线 */
+.split-slot.on::before { background: var(--brand); width: 2px; }
+.split-slot.on {
+  background: #e0e4ff;
+  box-shadow: 0 0 0 1px #c7cdfa inset;
+}
+.split-slot.on::after {
+  content: '✂';
+  position: absolute;
+  left: 50%;
+  top: -1.05em;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--brand);
+  line-height: 1;
+}

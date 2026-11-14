@@ -335,82 +335,102 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
   };
 
   /**
-   * 段落拆分对话框。
+   * 段落拆分对话框：在文字上直接点分割线。
    *
-   * 列出所有可以切开的位置（优先句读处），点哪个就在哪切。
-   * 「一句里有两个人在说话」这种情况自动分段切不出来，只能人工指定。
+   * 交互照搬视频编辑器：每个字之间都有一条可点的缝，点一下插一条分割线，
+   * 再点一下取消。可以插任意多条 —— 一段里有两三个人也拆得开。
+   *
+   * 之前的版本会列出「所有可能的字符位置」让用户挑，一段 50 字就列 40 条，
+   * 既难找又没法拆成三段以上。
    */
   const openSplitDialog = (segIndex: number): void => {
     const seg = task.segments[segIndex];
     if (!seg) return;
 
-    /** 候选切分点：句读之后优先，其次每个字符位置。 */
-    const candidates = (): number[] => {
-      const text = seg.text;
-      const out: number[] = [];
-      // 句读后
-      for (let i = 0; i < text.length; i += 1) {
-        if ('。！？；'.includes(text[i]) && i + 1 < text.length) out.push(i + 1);
+    const text = seg.text;
+    /** 已选中的切分点（字符偏移） */
+    const cuts = new Set<number>();
+    const counter = h('span', { class: 'tiny muted' }, '还没有切分线');
+    const slots: HTMLElement[] = [];
+
+    const refresh = (): void => {
+      const n = cuts.size;
+      counter.textContent = n ? `将拆成 ${n + 1} 段` : '还没有切分线';
+      for (const s of slots) {
+        const at = Number(s.dataset.pos);
+        s.classList.toggle('on', cuts.has(at));
       }
-      // 逗号后
-      for (let i = 0; i < text.length; i += 1) {
-        if ('，、'.includes(text[i]) && i + 1 < text.length) out.push(i + 1);
-      }
-      // 每个字符位置兜底（长句里可能没有标点）
-      for (let i = 1; i < text.length; i += 1) out.push(i);
-      return [...new Set(out)];
+      confirmBtn.toggleAttribute('disabled', n === 0);
     };
 
-    const points = candidates();
-    const rowEls: HTMLElement[] = [];
-
-    const list = h('div', { class: 'split-list' });
-    for (const p of points.slice(0, 40)) {
-      const before = seg.text.slice(Math.max(0, p - 12), p);
-      const after = seg.text.slice(p, p + 12);
-      const isPunct = '。！？；，、'.includes(seg.text[p - 1]);
-      const row = h(
-        'button',
-        {
-          class: `split-point${isPunct ? ' split-point-punct' : ''}`,
-          type: 'button',
+    // 逐字渲染，字与字之间放一条可点的缝
+    const editor = h('div', { class: 'split-editor' });
+    for (let i = 0; i < text.length; i += 1) {
+      // 字之间的缝（跳过长段里过密的位置：每字都可点，但视觉上只有 hover 才显形）
+      if (i > 0) {
+        const slot = h('span', {
+          class: 'split-slot',
+          'data-pos': String(i),
+          title: '在这里切开',
           onclick: () => {
-            for (const r of rowEls) r.classList.remove('on');
-            row.classList.add('on');
-            void doSplit(p);
+            if (cuts.has(i)) cuts.delete(i);
+            else cuts.add(i);
+            refresh();
           },
-        },
-        h('span', { class: 'split-before' }, `${Math.max(0, p - 12) > 0 ? '…' : ''}${before}`),
-        h('span', { class: 'split-mark' }, '｜'),
-        h('span', { class: 'split-after' }, `${after}${p + 12 < seg.text.length ? '…' : ''}`),
-      );
-      rowEls.push(row);
-      list.appendChild(row);
+        });
+        slots.push(slot);
+        editor.appendChild(slot);
+      }
+      editor.appendChild(h('span', { class: 'split-char' }, text[i]));
     }
 
-    const doSplit = async (cut: number): Promise<void> => {
-      try {
-        await api.splitSegment(task.id, segIndex, cut);
-        closeModal();
-        toast('已拆开，可以分别标注了', 'ok');
-        void renderTaskDetail(root, task.id);
-      } catch (err) {
-        toast(err instanceof Error ? err.message : String(err), 'err');
-      }
-    };
-
-    showModal({
-      title: '在哪里拆开？',
-      wide: true,
-      body: h(
-        'div',
-        null,
-        h('div', { class: 'tiny muted', style: 'margin-bottom:10px' }, '点一条线，就在那里切开：'),
-        h('div', { class: 'alert info', style: 'margin-bottom:12px;font-size:12.5px' }, seg.text),
-        list,
-      ),
-      cancelText: '取消',
+    const confirmBtn = h(
+      'button',
+      { class: 'btn primary', disabled: true },
+      '拆开',
+    ) as HTMLButtonElement;
+    confirmBtn.addEventListener('click', () => {
+      void (async () => {
+        try {
+          await api.splitSegment(task.id, segIndex, [...cuts].sort((a, b) => a - b));
+          closeModal();
+          toast(`已拆成 ${cuts.size + 1} 段，可以分别标注了`, 'ok');
+          void renderTaskDetail(root, task.id);
+        } catch (err) {
+          toast(err instanceof Error ? err.message : String(err), 'err');
+        }
+      })();
     });
+
+    const cancelBtn = h('button', { class: 'btn' }, '取消');
+    cancelBtn.addEventListener('click', () => closeModal());
+
+    // 自己拼 footer：这里要两个自定义按钮（默认的 showModal 不够灵活）
+    const mask = h('div', { class: 'modal-mask' });
+    const dialog = h(
+      'div',
+      { class: 'modal' },
+      h('div', { class: 'modal-head' }, h('h3', null, '在哪里拆开？')),
+      h(
+        'div',
+        { class: 'modal-body' },
+        h(
+          'div',
+          { class: 'tiny muted', style: 'margin-bottom:10px' },
+          '在字与字之间点一下，插一条分割线。可以点多条，拆成几段都行；再点一次取消。',
+        ),
+        editor,
+        h('div', { class: 'row', style: 'margin-top:12px;align-items:center' }, counter),
+      ),
+      h('div', { class: 'modal-foot' }, cancelBtn, confirmBtn),
+    );
+    mask.appendChild(dialog);
+    document.getElementById('modal-root')!.appendChild(mask);
+    document.body.style.overflow = 'hidden';
+    mask.addEventListener('mousedown', (ev) => {
+      if (ev.target === mask) closeModal();
+    });
+    refresh();
   };
 
 

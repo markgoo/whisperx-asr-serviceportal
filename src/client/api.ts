@@ -112,10 +112,11 @@ export const api = {
     }),
 
   /** 把一段在指定字符位置拆成两段 */
-  splitSegment: (id: number, index: number, cut: number) =>
+  /** 把一段按多个切分点拆成多段 */
+  splitSegment: (id: number, index: number, cuts: number[]) =>
     request<{ task: TaskDetail; pieces: number }>(`/tasks/${id}/segments/split`, {
       method: 'POST',
-      body: JSON.stringify({ index, cut }),
+      body: JSON.stringify({ index, cuts }),
     }),
 
   /** 用人工标注的段落做种子，重新分析其他段落的说话人 */
