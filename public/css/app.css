@@ -985,3 +985,31 @@ details.adv[open] { margin-bottom: 6px; }
   align-items: center;
   gap: 6px;
 }
+
+/* 拆分弹窗：进度条 + 文字跟随高亮 */
+.split-player-block {
+  margin-bottom: 12px;
+}
+.split-bar {
+  height: 6px;
+  background: #e6e8f2;
+  border-radius: 999px;
+  cursor: pointer;
+  margin-top: 8px;
+  overflow: hidden;
+}
+.split-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #6366f1, #4f46e5);
+  transition: width .08s linear;
+}
+/* 已播放过的字变淡，当前字高亮 */
+.split-char.playing { color: #98a0b8; }
+.split-char.at {
+  background: #dbe0ff;
+  color: #1f2937;
+  border-radius: 3px;
+  box-shadow: 0 0 0 1px #c7cdfa inset;
+}

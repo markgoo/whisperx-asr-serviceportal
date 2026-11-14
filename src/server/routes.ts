@@ -65,6 +65,7 @@ import { checkAsrHealth, type AsrSegment } from './asrClient';
 import { checkPuncHealth, classifySpans, punctuateTexts } from './puncClient';
 import { rebuildSegments } from './reprocessor';
 import { splitSegment } from './splitSegment';
+import { charTimings } from './charTiming';
 import { loadTaskWords } from './taskWords';
 import {
   applySpeakerUpdates,
@@ -828,6 +829,26 @@ api.post(
  * 一段里常常混着两个人的话，自动分段切不出来时只能人工指定在哪切开。
  * 时间用词级时间戳换算，比按字符比例估算准。
  */
+/**
+ * 某一段的字符级时间映射。
+ *
+ * 前端用它做播放进度与文字的高亮联动。单独一个接口而不是塞进
+ * result_json：一段几十个字符，全塞进去会让列表和详情响应变胖。
+ */
+api.get(
+  '/tasks/:id/char-timings',
+  requireAuth,
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const task = loadTaskFor(req, toInt(req.params.id, 0));
+    const index = toInt(req.query.index as string, -1);
+    const segments = safeParseSegments(task.result_json);
+    if (index < 0 || index >= segments.length) throw badRequest('段落索引超出范围');
+
+    const stored = loadTaskWords(task.id);
+    const timings = charTimings(segments[index], stored?.words);
+    res.json({ timings, hasWordData: !!stored });
+  }),
+);
 api.post(
   '/tasks/:id/segments/split',
   requireAuth,

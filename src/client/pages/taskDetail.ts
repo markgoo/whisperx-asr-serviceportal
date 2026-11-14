@@ -365,6 +365,8 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
 
     // 逐字渲染，字与字之间放一条可点的缝
     const editor = h('div', { class: 'split-editor' });
+    /** 每个字符的 DOM 节点，供播放时高亮 */
+    const charEls: HTMLElement[] = [];
     for (let i = 0; i < text.length; i += 1) {
       // 字之间的缝（跳过长段里过密的位置：每字都可点，但视觉上只有 hover 才显形）
       if (i > 0) {
@@ -381,8 +383,59 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
         slots.push(slot);
         editor.appendChild(slot);
       }
-      editor.appendChild(h('span', { class: 'split-char' }, text[i]));
+      const charEl = h('span', { class: 'split-char' }, text[i]);
+      charEls.push(charEl);
+      editor.appendChild(charEl);
     }
+
+    // ---- 播放进度条 + 文字联动 ----
+    const barFill = h('span', { style: 'width:0%' });
+    const bar = h('div', { class: 'split-bar', title: '点击跳到这一段里的对应位置' }, barFill);
+
+    // 字符级时间：有词级数据就用真的，没有就退回按字数均分
+    let timings: Array<{ index: number; start: number; end: number }> = [];
+    void api
+      .charTimings(task.id, segIndex)
+      .then((r) => {
+        timings = r.timings;
+      })
+      .catch(() => {
+        // 拿不到就退化成均分，不影响播放
+      });
+
+    /** 根据当前时间高亮到哪个字。 */
+    const highlight = (t: number): void => {
+      if (!charEls.length) return;
+      let idx = -1;
+      if (timings.length) {
+        for (const c of timings) {
+          if (t >= c.start && t <= c.end) {
+            idx = c.index;
+            break;
+          }
+        }
+        // 落在字符间隙里（或者时间戳有跳跃）就取最后一个已开始的字
+        if (idx < 0) {
+          for (const c of timings) {
+            if (c.start <= t) idx = c.index;
+            else break;
+          }
+        }
+      } else {
+        // 没有精确映射：按比例估算
+        const ratio = (t - seg.start) / segDur;
+        idx = Math.min(charEls.length - 1, Math.max(0, Math.floor(ratio * charEls.length)));
+      }
+      for (let i = 0; i < charEls.length; i += 1) {
+        charEls[i].classList.toggle('playing', i <= idx);
+        charEls[i].classList.toggle('at', i === idx);
+      }
+    };
+
+    const clearHighlight = (): void => {
+      for (const el of charEls) el.classList.remove('playing', 'at');
+      barFill.style.width = '0%';
+    };
 
     const confirmBtn = h(
       'button',
@@ -450,6 +503,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
 
     segAudio.addEventListener('timeupdate', () => {
       syncSeg();
+      highlight(segAudio.currentTime);
+      const ratio = Math.min(1, Math.max(0, (segAudio.currentTime - seg.start) / segDur));
+      barFill.style.width = `${ratio * 100}%`;
       if (segAudio.currentTime >= seg.end - 0.02) {
         if (looping) {
           segAudio.currentTime = seg.start;
@@ -457,21 +513,40 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
           stopSeg();
           segAudio.currentTime = seg.start;
           syncSeg();
+          clearHighlight();
         }
       }
     });
-    segAudio.addEventListener('ended', stopSeg);
+    segAudio.addEventListener('ended', () => {
+      stopSeg();
+      clearHighlight();
+    });
     segAudio.addEventListener('error', () => {
       timeLabel.textContent = '音频不可用';
     });
 
+    // 点进度条跳到这一段的对应位置
+    bar.addEventListener('click', (ev: MouseEvent) => {
+      const rect = bar.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width));
+      segAudio.currentTime = seg.start + ratio * segDur;
+      syncSeg();
+      highlight(segAudio.currentTime);
+      barFill.style.width = `${ratio * 100}%`;
+    });
+
     const playerRow = h(
       'div',
-      { class: 'split-player' },
-      playBtn,
-      timeLabel,
-      h('div', { class: 'spacer' }),
-      loopLabel,
+      { class: 'split-player-block' },
+      h(
+        'div',
+        { class: 'split-player' },
+        playBtn,
+        timeLabel,
+        h('div', { class: 'spacer' }),
+        loopLabel,
+      ),
+      bar,
     );
 
     // 这个弹窗是手工拼的（showModal 不支持自定义 footer），所以关闭要自己管。
@@ -482,6 +557,7 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     }
     function close(): void {
       segAudio.pause();
+      clearHighlight();
       segAudio.src = '';
       mask.remove();
       document.body.style.overflow = '';

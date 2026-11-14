@@ -112,6 +112,12 @@ export const api = {
     }),
 
   /** 把一段在指定字符位置拆成两段 */
+  /** 某一段的字符级时间映射，用于播放与文字联动 */
+  charTimings: (id: number, index: number) =>
+    request<{ timings: Array<{ index: number; start: number; end: number }>; hasWordData: boolean }>(
+      `/tasks/${id}/char-timings?index=${index}`,
+    ),
+
   /** 把一段按多个切分点拆成多段 */
   splitSegment: (id: number, index: number, cuts: number[]) =>
     request<{ task: TaskDetail; pieces: number }>(`/tasks/${id}/segments/split`, {
