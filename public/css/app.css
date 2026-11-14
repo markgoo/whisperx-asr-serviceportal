@@ -968,3 +968,20 @@ details.adv[open] { margin-bottom: 6px; }
   color: var(--brand);
   line-height: 1;
 }
+
+/* 拆分弹窗里的段落播放器 */
+.split-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.split-player .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -402,11 +402,94 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
       })();
     });
 
-    const cancelBtn = h('button', { class: 'btn' }, '取消');
-    cancelBtn.addEventListener('click', () => closeModal());
-
-    // 自己拼 footer：这里要两个自定义按钮（默认的 showModal 不够灵活）
     const mask = h('div', { class: 'modal-mask' });
+    const cancelBtn = h('button', { class: 'btn' }, '取消');
+
+    // ---- 段落播放器 ----
+    // 判断在哪切必须能反复听，所以弹窗里带一个只听这一段的播放器。
+    // 用独立的 <audio>，不干扰主播放器；浏览器会复用同一份音频缓存。
+    const segAudio = new Audio(`/api/tasks/${task.id}/audio`);
+    segAudio.preload = 'metadata';
+    const segDur = Math.max(0.1, seg.end - seg.start);
+
+    const playIcon = h('span', null, '▶');
+    const playLabel = h('span', null, '播放这一段');
+    const playBtn = h('button', { class: 'btn sm', type: 'button', style: 'gap:6px' }, playIcon, playLabel);
+    const timeLabel = h('span', { class: 'tiny muted', style: 'font-variant-numeric:tabular-nums' }, `0:00 / ${segDur.toFixed(1)}s`);
+    const loopToggle = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    const loopLabel = h('label', { class: 'player-follow' }, loopToggle, '循环');
+
+    let looping = false;
+    loopToggle.addEventListener('change', () => {
+      looping = loopToggle.checked;
+    });
+
+    const syncSeg = (): void => {
+      const t = Math.max(0, segAudio.currentTime - seg.start);
+      const shown = Math.min(t, segDur);
+      timeLabel.textContent = `${shown.toFixed(1)} / ${segDur.toFixed(1)}s`;
+    };
+
+    const stopSeg = (): void => {
+      segAudio.pause();
+      playIcon.textContent = '▶';
+      playLabel.textContent = '播放这一段';
+    };
+
+    playBtn.addEventListener('click', () => {
+      if (!segAudio.paused) {
+        stopSeg();
+        return;
+      }
+      // 从头播这一段
+      segAudio.currentTime = seg.start;
+      void segAudio.play().catch(() => undefined);
+      playIcon.textContent = '❚❚';
+      playLabel.textContent = '暂停';
+    });
+
+    segAudio.addEventListener('timeupdate', () => {
+      syncSeg();
+      if (segAudio.currentTime >= seg.end - 0.02) {
+        if (looping) {
+          segAudio.currentTime = seg.start;
+        } else {
+          stopSeg();
+          segAudio.currentTime = seg.start;
+          syncSeg();
+        }
+      }
+    });
+    segAudio.addEventListener('ended', stopSeg);
+    segAudio.addEventListener('error', () => {
+      timeLabel.textContent = '音频不可用';
+    });
+
+    const playerRow = h(
+      'div',
+      { class: 'split-player' },
+      playBtn,
+      timeLabel,
+      h('div', { class: 'spacer' }),
+      loopLabel,
+    );
+
+    // 这个弹窗是手工拼的（showModal 不支持自定义 footer），所以关闭要自己管。
+    // ui.ts 的 closeModal() 操作的是它内部的 openModal 变量，管不到这里的节点，
+    // 之前「取消」点了没反应就是这个原因。
+    function onKey(ev: KeyboardEvent): void {
+      if (ev.key === 'Escape') close();
+    }
+    function close(): void {
+      segAudio.pause();
+      segAudio.src = '';
+      mask.remove();
+      document.body.style.overflow = '';
+      document.removeEventListener('keydown', onKey);
+    }
+
+    cancelBtn.addEventListener('click', close);
+
     const dialog = h(
       'div',
       { class: 'modal' },
@@ -417,8 +500,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
         h(
           'div',
           { class: 'tiny muted', style: 'margin-bottom:10px' },
-          '在字与字之间点一下，插一条分割线。可以点多条，拆成几段都行；再点一次取消。',
+            '在字与字之间点一下，插一条分割线。可以点多条，拆成几段都行；再点一次取消。',
         ),
+        playerRow,
         editor,
         h('div', { class: 'row', style: 'margin-top:12px;align-items:center' }, counter),
       ),
@@ -427,8 +511,9 @@ function renderResult(root: HTMLElement, task: TaskDetail): void {
     mask.appendChild(dialog);
     document.getElementById('modal-root')!.appendChild(mask);
     document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onKey);
     mask.addEventListener('mousedown', (ev) => {
-      if (ev.target === mask) closeModal();
+      if (ev.target === mask) close();
     });
     refresh();
   };
